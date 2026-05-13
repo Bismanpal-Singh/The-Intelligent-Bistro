@@ -15,6 +15,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { Fonts, Spacing } from '../../constants/theme';
 import { CATEGORIES, MENU_ITEMS, MenuItem } from '../../data/menu';
 import { useCartStore } from '../../store/cartStore';
+import MenuItemModal from '../../components/MenuItemModal';
 
 function ThemeToggle() {
   const { isDark, toggleTheme, colors } = useTheme();
@@ -62,7 +63,7 @@ function QuantityControl({ item }: { item: MenuItem }) {
   );
 }
 
-function MenuCard({ item }: { item: MenuItem }) {
+function MenuCard({ item, onPress }: { item: MenuItem; onPress: () => void }) {
   const { colors, isDark } = useTheme();
   const addItem = useCartStore((s) => s.addItem);
   const cartItems = useCartStore((s) => s.items);
@@ -84,6 +85,7 @@ function MenuCard({ item }: { item: MenuItem }) {
   const gp = gradients[item.id.charCodeAt(0) % gradients.length];
 
   return (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.92}>
     <Animated.View style={[styles.card, { transform: [{ scale }], borderColor: colors.borderSubtle, shadowColor: colors.shadow }]}>
       <LinearGradient colors={[gp[0], gp[1]]} style={styles.cardGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}>
         <View style={[styles.cardGoldBar, { backgroundColor: colors.gold }]} />
@@ -132,11 +134,13 @@ function MenuCard({ item }: { item: MenuItem }) {
         </View>
       </LinearGradient>
     </Animated.View>
+    </TouchableOpacity>
   );
 }
 
 export default function MenuScreen() {
   const [activeCategory, setActiveCategory] = useState('all');
+  const [selectedItem, setSelectedItem] = useState<MenuItem | null>(null);
   const { colors } = useTheme();
 
   const filtered = activeCategory === 'all' ? MENU_ITEMS : MENU_ITEMS.filter((i) => i.category === activeCategory);
@@ -145,13 +149,15 @@ export default function MenuScreen() {
     <View>
       {/* Header */}
       <View style={styles.header}>
-        <View style={styles.headerLeft}>
+        {/* Top row: eyebrow + toggle */}
+        <View style={styles.headerTopRow}>
           <Text style={[styles.headerEyebrow, { color: colors.creamMuted }]}>Welcome to</Text>
-          <Text style={[styles.headerTitle, { color: colors.cream }]}>The Bistro</Text>
-          <View style={[styles.headerDivider, { backgroundColor: colors.gold }]} />
-          <Text style={[styles.headerTagline, { color: colors.creamMuted }]}>Fine dining, simplified.</Text>
+          <ThemeToggle />
         </View>
-        <ThemeToggle />
+        {/* Title full width */}
+        <Text style={[styles.headerTitle, { color: colors.cream }]}>The Bistro</Text>
+        <View style={[styles.headerDivider, { backgroundColor: colors.gold }]} />
+        <Text style={[styles.headerTagline, { color: colors.creamMuted }]}>Fine dining, simplified.</Text>
       </View>
 
       {/* Category pills */}
@@ -170,12 +176,14 @@ export default function MenuScreen() {
       <FlatList
         data={filtered}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <MenuCard item={item} />}
+        renderItem={({ item }) => <MenuCard item={item} onPress={() => setSelectedItem(item)} />}
         ListHeaderComponent={ListHeader}
         contentContainerStyle={[styles.listContent, { paddingBottom: 120 }]}
         showsVerticalScrollIndicator={false}
         ItemSeparatorComponent={() => <View style={{ height: Spacing.md }} />}
       />
+
+      <MenuItemModal item={selectedItem} onClose={() => setSelectedItem(null)} />
     </SafeAreaView>
   );
 }
@@ -183,18 +191,19 @@ export default function MenuScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.md,
     paddingBottom: Spacing.sm,
   },
-  headerLeft: { flex: 1 },
-  headerEyebrow: { fontFamily: Fonts.serifItalic, fontSize: 13, letterSpacing: 0.5 },
-  headerTitle: { fontFamily: Fonts.serif, fontSize: 34, letterSpacing: -0.5, lineHeight: 40 },
+  headerTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 2,
+  },
+  headerEyebrow: { fontFamily: Fonts.displayItalic, fontSize: 15, letterSpacing: 0.3 },
+  headerTitle: { fontFamily: Fonts.display, fontSize: 48, letterSpacing: 0, lineHeight: 52 },
   headerDivider: { width: 40, height: 1.5, marginVertical: Spacing.sm },
-  headerTagline: { fontFamily: Fonts.sans, fontSize: 12, letterSpacing: 1.5, textTransform: 'uppercase' },
+  headerTagline: { fontFamily: Fonts.sans, fontSize: 11, letterSpacing: 2, textTransform: 'uppercase' },
   themeToggle: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -203,12 +212,11 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     borderRadius: 100,
     borderWidth: 1,
-    marginTop: 6,
   },
   themeIcon: { fontSize: 13 },
   themeLabel: { fontFamily: Fonts.sansMedium, fontSize: 11, letterSpacing: 0.3 },
   pillScroll: { marginTop: Spacing.md },
-  pillRow: { paddingHorizontal: Spacing.lg, gap: Spacing.sm, flexDirection: 'row' },
+  pillRow: { gap: Spacing.sm, flexDirection: 'row' },
   pillInner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -221,7 +229,7 @@ const styles = StyleSheet.create({
   },
   pillEmoji: { fontSize: 12 },
   pillLabel: { fontSize: 12, letterSpacing: 0.3 },
-  divider: { height: 1, marginHorizontal: Spacing.lg, marginTop: Spacing.md },
+  divider: { height: 1, marginTop: Spacing.md },
   listContent: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.md },
   card: {
     borderRadius: 16,

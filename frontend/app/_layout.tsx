@@ -13,6 +13,11 @@ import {
   DMSans_500Medium,
   DMSans_700Bold,
 } from '@expo-google-fonts/dm-sans';
+import {
+  CormorantGaramond_700Bold,
+  CormorantGaramond_600SemiBold,
+  CormorantGaramond_400Regular_Italic,
+} from '@expo-google-fonts/cormorant-garamond';
 import * as SplashScreen from 'expo-splash-screen';
 import { ThemeProvider, useTheme } from '../context/ThemeContext';
 
@@ -36,6 +41,9 @@ export default function RootLayout() {
     DMSans_400Regular,
     DMSans_500Medium,
     DMSans_700Bold,
+    CormorantGaramond_700Bold,
+    CormorantGaramond_600SemiBold,
+    CormorantGaramond_400Regular_Italic,
   });
 
   useEffect(() => {

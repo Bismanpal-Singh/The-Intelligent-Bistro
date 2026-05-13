@@ -41,9 +41,15 @@ export const LightColors = {
 export type ThemeColors = typeof DarkColors;
 
 export const Fonts = {
+  // Cormorant Garamond — used for the main brand title only
+  display: 'CormorantGaramond_700Bold',
+  displaySemi: 'CormorantGaramond_600SemiBold',
+  displayItalic: 'CormorantGaramond_400Regular_Italic',
+  // Playfair Display — used for headings and item names
   serif: 'PlayfairDisplay_700Bold',
   serifItalic: 'PlayfairDisplay_400Regular_Italic',
   serifRegular: 'PlayfairDisplay_400Regular',
+  // DM Sans — used for all body/UI text
   sans: 'DMSans_400Regular',
   sansMedium: 'DMSans_500Medium',
   sansBold: 'DMSans_700Bold',

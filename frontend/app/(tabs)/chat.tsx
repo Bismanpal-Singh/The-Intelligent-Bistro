@@ -1,15 +1,18 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
-  StyleSheet, KeyboardAvoidingView, Platform, Animated,
+  StyleSheet, Platform, Animated, Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../context/ThemeContext';
 import { Fonts, Spacing } from '../../constants/theme';
 import { useCartStore } from '../../store/cartStore';
 import { MENU_ITEMS } from '../../data/menu';
+import BistroAvatar, { BistroAvatarLarge } from '../../components/BistroAvatar';
+
+// Tab bar height to offset bottom input
+const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 85 : 65;
 
 type Message = {
   id: string;
@@ -39,17 +42,19 @@ function ChatBubble({ message }: { message: Message }) {
   }, []);
 
   return (
-    <Animated.View style={[styles.bubbleWrap, isUser && styles.bubbleWrapUser, { opacity, transform: [{ translateY }] }]}>
+    <Animated.View style={[
+      styles.bubbleWrap,
+      isUser && styles.bubbleWrapUser,
+      { opacity, transform: [{ translateY }] },
+    ]}>
       {!isUser && (
-        <View style={styles.avatar}>
-          <LinearGradient colors={[colors.gold, colors.goldDim]} style={styles.avatarGradient}>
-            <Text style={[styles.avatarText, { color: '#0D0D0D' }]}>B</Text>
-          </LinearGradient>
-        </View>
+        <BistroAvatar size={32} />
       )}
-      <View style={[styles.bubble, isUser
-        ? [styles.bubbleUser, { backgroundColor: colors.goldMuted, borderColor: colors.border }]
-        : [styles.bubbleAssistant, { backgroundColor: colors.bgCard, borderColor: colors.borderSubtle }]
+      <View style={[
+        styles.bubble,
+        isUser
+          ? [styles.bubbleUser, { backgroundColor: colors.goldMuted, borderColor: colors.border }]
+          : [styles.bubbleAssistant, { backgroundColor: colors.bgCard, borderColor: colors.borderSubtle }],
       ]}>
         <Text style={[styles.bubbleText, { color: colors.cream }]}>{message.text}</Text>
         <Text style={[styles.bubbleTime, { color: isUser ? colors.goldDim : colors.creamMuted }]}>
@@ -86,11 +91,7 @@ function TypingIndicator() {
 
   return (
     <View style={styles.bubbleWrap}>
-      <View style={styles.avatar}>
-        <LinearGradient colors={[colors.gold, colors.goldDim]} style={styles.avatarGradient}>
-          <Text style={[styles.avatarText, { color: '#0D0D0D' }]}>B</Text>
-        </LinearGradient>
-      </View>
+      <BistroAvatar size={32} />
       <View style={[styles.bubble, styles.bubbleAssistant, styles.typingBubble, { backgroundColor: colors.bgCard, borderColor: colors.borderSubtle }]}>
         {dots.map((dot, i) => (
           <Animated.View key={i} style={[styles.typingDot, { opacity: dot, backgroundColor: colors.gold }]} />
@@ -101,12 +102,37 @@ function TypingIndicator() {
 }
 
 export default function ChatScreen() {
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const [messages, setMessages] = useState<Message[]>([WELCOME]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const { addItem, removeItem, clearCart, items } = useCartStore();
+  const inputBottom = useRef(new Animated.Value(TAB_BAR_HEIGHT)).current;
+
+  useEffect(() => {
+    const show = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      (e) => {
+        Animated.timing(inputBottom, {
+          toValue: e.endCoordinates.height,
+          duration: Platform.OS === 'ios' ? e.duration : 150,
+          useNativeDriver: false,
+        }).start();
+      }
+    );
+    const hide = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      (e) => {
+        Animated.timing(inputBottom, {
+          toValue: TAB_BAR_HEIGHT,
+          duration: Platform.OS === 'ios' ? e.duration : 150,
+          useNativeDriver: false,
+        }).start();
+      }
+    );
+    return () => { show.remove(); hide.remove(); };
+  }, []);
 
   const sendMessage = async () => {
     const text = input.trim();
@@ -140,9 +166,19 @@ export default function ChatScreen() {
         }
       }
 
-      setMessages((prev) => [...prev, { id: (Date.now() + 1).toString(), role: 'assistant', text: data.reply ?? 'Done!', timestamp: new Date() }]);
+      setMessages((prev) => [...prev, {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        text: data.reply ?? 'Done!',
+        timestamp: new Date(),
+      }]);
     } catch {
-      setMessages((prev) => [...prev, { id: (Date.now() + 1).toString(), role: 'assistant', text: "I'm having trouble connecting right now. Please try again in a moment.", timestamp: new Date() }]);
+      setMessages((prev) => [...prev, {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        text: "I'm having trouble connecting right now. Please try again in a moment.",
+        timestamp: new Date(),
+      }]);
     } finally {
       setLoading(false);
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
@@ -153,47 +189,45 @@ export default function ChatScreen() {
     <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <LinearGradient colors={[colors.gold, colors.goldDim]} style={styles.headerAvatar}>
-            <Text style={[styles.headerAvatarText, { color: '#0D0D0D' }]}>B</Text>
-          </LinearGradient>
-          <View>
-            <Text style={[styles.headerName, { color: colors.cream }]}>Bistro</Text>
-            <View style={styles.onlineRow}>
-              <View style={[styles.onlineDot, { backgroundColor: '#52B788' }]} />
-              <Text style={[styles.onlineText, { color: colors.creamMuted }]}>Your dining assistant</Text>
-            </View>
+        <BistroAvatarLarge />
+        <View style={styles.headerText}>
+          <Text style={[styles.headerName, { color: colors.cream }]}>Bistro</Text>
+          <View style={styles.onlineRow}>
+            <View style={[styles.onlineDot, { backgroundColor: '#52B788' }]} />
+            <Text style={[styles.onlineText, { color: colors.creamMuted }]}>Your dining assistant</Text>
           </View>
         </View>
       </View>
 
       <View style={[styles.headerRule, { backgroundColor: colors.borderSubtle }]} />
 
-      <FlatList
-        ref={flatListRef}
-        data={messages}
-        keyExtractor={(m) => m.id}
-        renderItem={({ item }) => <ChatBubble message={item} />}
-        contentContainerStyle={styles.messageList}
-        showsVerticalScrollIndicator={false}
-        ListFooterComponent={loading ? <TypingIndicator /> : null}
-        onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-      />
+      {/* Messages + input */}
+      <Animated.View style={[styles.flex, { paddingBottom: inputBottom }]}>
+        <FlatList
+          ref={flatListRef}
+          data={messages}
+          keyExtractor={(m) => m.id}
+          renderItem={({ item }) => <ChatBubble message={item} />}
+          contentContainerStyle={styles.messageList}
+          showsVerticalScrollIndicator={false}
+          ListFooterComponent={loading ? <TypingIndicator /> : null}
+          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+        />
 
-      {messages.length <= 1 && (
-        <View style={styles.suggestions}>
-          {["What's popular?", 'Add a burger', 'What desserts?'].map((s) => (
-            <TouchableOpacity key={s} onPress={() => setInput(s)} style={[styles.chip, { backgroundColor: colors.bgCard, borderColor: colors.border }]} activeOpacity={0.7}>
-              <Text style={[styles.chipText, { color: colors.gold }]}>{s}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      )}
+        {messages.length <= 1 && (
+          <View style={styles.suggestions}>
+            {["What's popular?", 'Add a burger', 'What desserts?'].map((s) => (
+              <TouchableOpacity key={s} onPress={() => setInput(s)} style={[styles.chip, { backgroundColor: colors.bgCard, borderColor: colors.border }]} activeOpacity={0.7}>
+                <Text style={[styles.chipText, { color: colors.gold }]}>{s}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
 
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <View style={[styles.inputWrap, { backgroundColor: colors.inputBg }]}>
-          <View style={[styles.inputBorder, { backgroundColor: colors.borderSubtle }]} />
+        {/* Input bar */}
+        <View style={[styles.inputWrap, { backgroundColor: colors.inputBg, borderTopColor: colors.borderSubtle }]}>
           <View style={styles.inputRow}>
+
             <TextInput
               value={input}
               onChangeText={setInput}
@@ -216,28 +250,31 @@ export default function ChatScreen() {
             </TouchableOpacity>
           </View>
         </View>
-      </KeyboardAvoidingView>
+      </Animated.View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, paddingBottom: Spacing.md },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  headerAvatar: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-  headerAvatarText: { fontFamily: Fonts.serif, fontSize: 20 },
-  headerName: { fontFamily: Fonts.serif, fontSize: 20 },
-  onlineRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 1 },
+  flex: { flex: 1 },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.md,
+    gap: 14,
+  },
+  headerText: { flex: 1 },
+  headerName: { fontFamily: Fonts.display, fontSize: 22, lineHeight: 26 },
+  onlineRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 2 },
   onlineDot: { width: 6, height: 6, borderRadius: 3 },
   onlineText: { fontFamily: Fonts.sans, fontSize: 11, letterSpacing: 0.3 },
   headerRule: { height: 1, marginHorizontal: Spacing.lg },
-  messageList: { paddingHorizontal: Spacing.md, paddingTop: Spacing.md, paddingBottom: 20, gap: 12 },
+  messageList: { paddingHorizontal: Spacing.md, paddingTop: Spacing.md, paddingBottom: 16, gap: 12 },
   bubbleWrap: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginBottom: 4 },
   bubbleWrapUser: { flexDirection: 'row-reverse' },
-  avatar: { width: 32, height: 32, borderRadius: 16, overflow: 'hidden' },
-  avatarGradient: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { fontFamily: Fonts.serif, fontSize: 14 },
   bubble: { maxWidth: '75%', borderRadius: 16, padding: 12, gap: 4 },
   bubbleAssistant: { borderWidth: 1, borderBottomLeftRadius: 4 },
   bubbleUser: { borderWidth: 1, borderBottomRightRadius: 4 },
@@ -248,10 +285,21 @@ const styles = StyleSheet.create({
   suggestions: { flexDirection: 'row', paddingHorizontal: Spacing.md, paddingBottom: 8, gap: 8, flexWrap: 'wrap' },
   chip: { borderWidth: 1, borderRadius: 100, paddingHorizontal: 14, paddingVertical: 7 },
   chipText: { fontFamily: Fonts.sans, fontSize: 12, letterSpacing: 0.3 },
-  inputWrap: { paddingBottom: Platform.OS === 'ios' ? 28 : 12 },
-  inputBorder: { height: 1, marginHorizontal: Spacing.md },
-  inputRow: { flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: Spacing.md, paddingTop: 10, gap: 10 },
-  input: { flex: 1, fontFamily: Fonts.sans, fontSize: 15, lineHeight: 22, maxHeight: 100, paddingVertical: 8 },
+  inputWrap: {
+    borderTopWidth: 1,
+    paddingHorizontal: Spacing.md,
+    paddingTop: 10,
+    paddingBottom: 10,
+  },
+  inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 10 },
+  input: {
+    flex: 1,
+    fontFamily: Fonts.sans,
+    fontSize: 15,
+    lineHeight: 22,
+    maxHeight: 100,
+    paddingVertical: 8,
+  },
   sendBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginBottom: 2 },
   sendIcon: { fontSize: 18, fontWeight: '700', lineHeight: 20 },
 });
