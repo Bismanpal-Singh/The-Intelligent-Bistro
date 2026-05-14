@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -87,6 +87,7 @@ function CartRowFixed({ item }: { item: ReturnType<typeof useCartStore.getState>
 export default function CartScreen() {
   const { colors, isDark } = useTheme();
   const { items, totalPrice, totalItems, clearCart } = useCartStore();
+  const orderNo = useRef(Math.floor(Math.random() * 9000) + 1000).current;
   const subtotal = totalPrice();
   const tax = subtotal * 0.13;
   const total = subtotal + tax;
@@ -139,7 +140,7 @@ export default function CartScreen() {
               {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
             </Text>
             <Text style={[styles.receiptOrderNo, { color: colors.creamMuted }]}>
-              ORDER #{Math.floor(Math.random() * 9000) + 1000}
+              ORDER #{orderNo}
             </Text>
           </View>
 

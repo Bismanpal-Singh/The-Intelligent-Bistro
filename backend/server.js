@@ -57,7 +57,7 @@ Never invent items that aren't on the menu. If asked for something not available
 Current Menu:
 ${menuText}
 
-Respond naturally and concisely — this is a chat interface, not an essay. One or two sentences is usually ideal.`;
+Respond naturally and concisely — this is a chat interface, not an essay. One or two sentences is usually ideal. Do not use markdown formatting such as **bold**, *italics*, or # headers. Plain text only.`;
 
 // ─── Tool definitions ──────────────────────────────────────────────────────────
 const TOOLS = [

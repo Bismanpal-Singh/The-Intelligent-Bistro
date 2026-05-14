@@ -122,6 +122,7 @@ export default function ChatScreen() {
           duration: Platform.OS === 'ios' ? e.duration : 150,
           useNativeDriver: false,
         }).start();
+        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), Platform.OS === 'ios' ? e.duration : 160);
       }
     );
     const hide = Keyboard.addListener(
@@ -136,6 +137,13 @@ export default function ChatScreen() {
     );
     return () => { show.remove(); hide.remove(); };
   }, []);
+
+  // Scroll to end when typing indicator appears
+  useEffect(() => {
+    if (loading) {
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+    }
+  }, [loading]);
 
   const sendMessage = async () => {
     const text = input.trim();
