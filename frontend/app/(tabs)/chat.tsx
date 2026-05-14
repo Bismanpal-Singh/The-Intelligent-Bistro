@@ -103,6 +103,8 @@ function TypingIndicator() {
 
 type HistoryEntry = { role: 'user' | 'assistant'; content: string };
 
+const TYPING_SPEED_MS = 9; // ms per character (~110 chars/sec)
+
 export default function ChatScreen() {
   const { colors } = useTheme();
   const [messages, setMessages] = useState<Message[]>([WELCOME]);
@@ -113,6 +115,32 @@ export default function ChatScreen() {
   const { addItem, removeItem, updateQuantity, clearCart, items } = useCartStore();
   const inputBottom = useRef(new Animated.Value(TAB_BAR_HEIGHT)).current;
 
+  // Typing queue — incoming chunks get buffered here, drained char-by-char
+  const typingQueue = useRef('');
+  const typingInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+  const typingTarget = useRef('');
+
+  const startTyping = (msgId: string) => {
+    if (typingInterval.current) return;
+    typingInterval.current = setInterval(() => {
+      if (typingQueue.current.length === 0) return;
+      const char = typingQueue.current[0];
+      typingQueue.current = typingQueue.current.slice(1);
+      typingTarget.current += char;
+      const snapshot = typingTarget.current;
+      setMessages((prev) => prev.map((m) => m.id === msgId ? { ...m, text: snapshot } : m));
+    }, TYPING_SPEED_MS);
+  };
+
+  const stopTyping = () => {
+    if (typingInterval.current) {
+      clearInterval(typingInterval.current);
+      typingInterval.current = null;
+    }
+    typingQueue.current = '';
+    typingTarget.current = '';
+  };
+
   useEffect(() => {
     const show = Keyboard.addListener(
       Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
@@ -122,7 +150,7 @@ export default function ChatScreen() {
           duration: Platform.OS === 'ios' ? e.duration : 150,
           useNativeDriver: false,
         }).start();
-        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), Platform.OS === 'ios' ? e.duration : 160);
+        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), (Platform.OS === 'ios' ? e.duration : 160) + 50);
       }
     );
     const hide = Keyboard.addListener(
@@ -138,12 +166,11 @@ export default function ChatScreen() {
     return () => { show.remove(); hide.remove(); };
   }, []);
 
-  // Scroll to end when typing indicator appears
+  // Scroll to bottom whenever messages change or typing indicator appears/disappears
   useEffect(() => {
-    if (loading) {
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
-    }
-  }, [loading]);
+    const timer = setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
+    return () => clearTimeout(timer);
+  }, [messages.length, loading]);
 
   const applyActions = (actions: any[]) => {
     for (const action of actions) {
@@ -170,32 +197,20 @@ export default function ChatScreen() {
     setMessages((prev) => [...prev, userMsg]);
     setInput('');
     setLoading(true);
-    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
 
     const assistantId = (Date.now() + 1).toString();
-    let assistantText = '';
+    let fullText = '';
+    stopTyping();
 
-    try {
-      const response = await fetch('http://192.168.3.239:3000/api/chat/stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, cartItems: items, history }),
-      });
+    await new Promise<void>((resolve) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', 'http://192.168.3.239:3000/api/chat/stream');
+      xhr.setRequestHeader('Content-Type', 'application/json');
 
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('no reader');
+      let processed = 0;
 
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-
+      const handleChunk = (chunk: string) => {
+        const lines = chunk.split('\n');
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           try {
@@ -203,37 +218,55 @@ export default function ChatScreen() {
 
             if (data.type === 'actions') {
               applyActions(data.actions);
-              // Stop typing indicator, add the response bubble (empty for now)
               setLoading(false);
               setMessages((prev) => [...prev, { id: assistantId, role: 'assistant', text: '', timestamp: new Date() }]);
-              setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+              startTyping(assistantId);
 
             } else if (data.type === 'delta') {
-              assistantText += data.text;
-              setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, text: assistantText } : m));
+              fullText += data.text;
+              typingQueue.current += data.text;
 
             } else if (data.type === 'done') {
-              setHistory((prev) => [
-                ...prev,
-                { role: 'user', content: text },
-                { role: 'assistant', content: assistantText },
-              ]);
-              setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+              const waitAndSave = () => {
+                if (typingQueue.current.length > 0) {
+                  setTimeout(waitAndSave, 100);
+                } else {
+                  stopTyping();
+                  setHistory((prev) => [...prev, { role: 'user', content: text }, { role: 'assistant', content: fullText }]);
+                }
+              };
+              waitAndSave();
             }
           } catch { /* ignore malformed lines */ }
         }
-      }
-    } catch {
-      setLoading(false);
-      setMessages((prev) => [...prev, {
-        id: assistantId,
-        role: 'assistant',
-        text: "I'm having trouble connecting right now. Please try again in a moment.",
-        timestamp: new Date(),
-      }]);
-    } finally {
-      setLoading(false);
-    }
+      };
+
+      xhr.onprogress = () => {
+        const newChunk = xhr.responseText.slice(processed);
+        processed = xhr.responseText.length;
+        handleChunk(newChunk);
+      };
+
+      xhr.onload = () => {
+        const newChunk = xhr.responseText.slice(processed);
+        if (newChunk) handleChunk(newChunk);
+        resolve();
+      };
+
+      xhr.onerror = () => {
+        stopTyping();
+        setLoading(false);
+        setMessages((prev) => [...prev, {
+          id: assistantId,
+          role: 'assistant',
+          text: "I'm having trouble connecting right now. Please try again in a moment.",
+          timestamp: new Date(),
+        }]);
+        resolve();
+      };
+
+      xhr.send(JSON.stringify({ message: text, cartItems: items, history }));
+    });
   };
 
   return (
@@ -262,7 +295,7 @@ export default function ChatScreen() {
           contentContainerStyle={styles.messageList}
           showsVerticalScrollIndicator={false}
           ListFooterComponent={loading ? <TypingIndicator /> : null}
-          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
         />
 
         {messages.length <= 1 && (
@@ -323,7 +356,7 @@ const styles = StyleSheet.create({
   onlineDot: { width: 6, height: 6, borderRadius: 3 },
   onlineText: { fontFamily: Fonts.sans, fontSize: 11, letterSpacing: 0.3 },
   headerRule: { height: 1, marginHorizontal: Spacing.lg },
-  messageList: { paddingHorizontal: Spacing.md, paddingTop: Spacing.md, paddingBottom: 16, gap: 12 },
+  messageList: { flexGrow: 1, justifyContent: 'flex-end', paddingHorizontal: Spacing.md, paddingTop: Spacing.md, paddingBottom: 4, gap: 12 },
   bubbleWrap: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginBottom: 4 },
   bubbleWrapUser: { flexDirection: 'row-reverse' },
   bubble: { maxWidth: '75%', borderRadius: 16, padding: 12, gap: 4 },
