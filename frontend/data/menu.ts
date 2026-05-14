@@ -70,6 +70,28 @@ export const MENU_ITEMS: MenuItem[] = [
     calories: 290,
     allergens: ['Gluten', 'Dairy'],
   },
+  {
+    id: 'avocado-toast',
+    name: 'Avocado Toast',
+    description: 'Sourdough, smashed avocado, chilli flakes, hemp seeds, lemon zest',
+    price: 13.0,
+    category: 'starters',
+    image: 'https://images.unsplash.com/photo-1687276287139-88f7333c8ca4?w=400&q=80',
+    tags: ['vegan', 'vegetarian'],
+    calories: 310,
+    allergens: ['Gluten'],
+  },
+  {
+    id: 'caprese-stack',
+    name: 'Caprese Stack',
+    description: 'Buffalo mozzarella, heritage tomatoes, fresh basil, aged balsamic',
+    price: 14.0,
+    category: 'starters',
+    image: 'https://images.unsplash.com/photo-1623855244697-5d8fbe9c7892?w=400&q=80',
+    tags: ['vegetarian'],
+    calories: 240,
+    allergens: ['Dairy'],
+  },
 
   // Mains
   {
@@ -126,6 +148,29 @@ export const MENU_ITEMS: MenuItem[] = [
     calories: 980,
     allergens: ['Dairy', 'Eggs'],
   },
+  {
+    id: 'mushroom-risotto',
+    name: 'Wild Mushroom Risotto',
+    description: 'Arborio rice, porcini & shiitake, truffle oil, aged parmesan',
+    price: 24.0,
+    category: 'mains',
+    image: 'https://images.unsplash.com/photo-1609770424775-39ec362f2d94?w=400&q=80',
+    tags: ['vegetarian'],
+    popular: true,
+    calories: 520,
+    allergens: ['Dairy'],
+  },
+  {
+    id: 'cauliflower-steak',
+    name: 'Roasted Cauliflower Steak',
+    description: 'Whole-roasted cauliflower, chermoula, pomegranate, toasted pine nuts',
+    price: 21.0,
+    category: 'mains',
+    image: 'https://images.unsplash.com/photo-1584638487253-d7e4ba628f73?w=400&q=80',
+    tags: ['vegan', 'vegetarian'],
+    calories: 340,
+    allergens: ['Nuts'],
+  },
 
   // Sides
   {
@@ -169,6 +214,18 @@ export const MENU_ITEMS: MenuItem[] = [
     image: 'https://images.unsplash.com/photo-1543339494-b4d7adecf3d8?w=400&q=80',
     calories: 560,
     allergens: ['Gluten', 'Dairy', 'Eggs'],
+  },
+  {
+    id: 'halloumi-fries',
+    name: 'Halloumi Fries',
+    description: 'Golden-fried halloumi strips, mint yoghurt dip, chilli honey drizzle',
+    price: 12.0,
+    category: 'sides',
+    image: 'https://images.unsplash.com/photo-1691200007743-0652bbbc1d7d?w=400&q=80',
+    tags: ['vegetarian'],
+    popular: true,
+    calories: 420,
+    allergens: ['Dairy'],
   },
 
   // Drinks
@@ -266,5 +323,16 @@ export const MENU_ITEMS: MenuItem[] = [
     image: 'https://images.unsplash.com/photo-1488477181210-c0a05b4a2df0?w=400&q=80',
     calories: 310,
     allergens: ['Dairy'],
+  },
+  {
+    id: 'mango-sorbet',
+    name: 'Mango Sorbet',
+    description: 'Three scoops of Alphonso mango sorbet, fresh mint, lime zest',
+    price: 9.0,
+    category: 'desserts',
+    image: 'https://images.unsplash.com/photo-1663904458920-f153c162fa79?w=400&q=80',
+    tags: ['vegan', 'vegetarian'],
+    calories: 180,
+    allergens: [],
   },
 ];

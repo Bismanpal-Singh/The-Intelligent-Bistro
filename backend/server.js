@@ -20,15 +20,20 @@ const MENU = [
   { id: 'burrata',          name: 'Burrata & Heritage Tomato',  price: 16.00, category: 'starters', popular: true  },
   { id: 'french-onion',     name: 'French Onion Soup',          price: 12.00, category: 'starters'                },
   { id: 'garlic-focaccia',  name: 'Rosemary Focaccia',          price:  8.00, category: 'starters'                },
+  { id: 'avocado-toast',   name: 'Avocado Toast',              price: 13.00, category: 'starters'                },
+  { id: 'caprese-stack',   name: 'Caprese Stack',              price: 14.00, category: 'starters'                },
   { id: 'spicy-chicken',    name: 'Spicy Chicken Sandwich',     price: 22.00, category: 'mains',    popular: true  },
   { id: 'wagyu-burger',     name: 'Wagyu Beef Burger',          price: 28.00, category: 'mains',    popular: true  },
   { id: 'grilled-salmon',   name: 'Grilled Atlantic Salmon',    price: 32.00, category: 'mains'                   },
   { id: 'veggie-wrap',      name: 'Roasted Veggie Wrap',        price: 18.00, category: 'mains'                   },
   { id: 'steak-frites',     name: 'Steak Frites',               price: 42.00, category: 'mains'                   },
+  { id: 'mushroom-risotto', name: 'Wild Mushroom Risotto',      price: 24.00, category: 'mains',    popular: true  },
+  { id: 'cauliflower-steak',name: 'Roasted Cauliflower Steak',  price: 21.00, category: 'mains'                   },
   { id: 'truffle-fries',    name: 'Truffle Fries',              price: 10.00, category: 'sides',    popular: true  },
   { id: 'onion-rings',      name: 'Onion Rings',                price:  9.00, category: 'sides'                   },
   { id: 'side-salad',       name: 'Garden Salad',               price:  8.00, category: 'sides'                   },
   { id: 'mac-cheese',       name: 'Bistro Mac & Cheese',        price: 11.00, category: 'sides'                   },
+  { id: 'halloumi-fries',  name: 'Halloumi Fries',             price: 12.00, category: 'sides',    popular: true  },
   { id: 'house-lemonade',   name: 'House Lemonade',             price:  6.00, category: 'drinks',   popular: true  },
   { id: 'still-water',      name: 'Still Water',                price:  3.00, category: 'drinks'                  },
   { id: 'sparkling-water',  name: 'Sparkling Water',            price:  4.00, category: 'drinks'                  },
@@ -38,6 +43,7 @@ const MENU = [
   { id: 'lava-cake',        name: 'Chocolate Lava Cake',        price: 14.00, category: 'desserts', popular: true  },
   { id: 'cheesecake',       name: 'Burnt Basque Cheesecake',    price: 12.00, category: 'desserts'                },
   { id: 'panna-cotta',      name: 'Vanilla Panna Cotta',        price: 11.00, category: 'desserts'                },
+  { id: 'mango-sorbet',    name: 'Mango Sorbet',               price:  9.00, category: 'desserts'                },
 ];
 
 const MENU_IDS = MENU.map((m) => m.id);
