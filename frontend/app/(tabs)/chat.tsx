@@ -145,6 +145,23 @@ export default function ChatScreen() {
     }
   }, [loading]);
 
+  const applyActions = (actions: any[]) => {
+    for (const action of actions) {
+      if (action.action === 'add') {
+        const item = MENU_ITEMS.find((m) => m.id === action.itemId);
+        if (item) for (let i = 0; i < (action.quantity ?? 1); i++) addItem(item);
+      } else if (action.action === 'remove') {
+        const item = MENU_ITEMS.find((m) => m.id === action.itemId);
+        if (item) removeItem(item.id);
+      } else if (action.action === 'update') {
+        const item = MENU_ITEMS.find((m) => m.id === action.itemId);
+        if (item) updateQuantity(item.id, action.quantity);
+      } else if (action.action === 'clear') {
+        clearCart();
+      }
+    }
+  };
+
   const sendMessage = async () => {
     const text = input.trim();
     if (!text || loading) return;
@@ -155,55 +172,67 @@ export default function ChatScreen() {
     setLoading(true);
     setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
 
+    const assistantId = (Date.now() + 1).toString();
+    let assistantText = '';
+
     try {
-      const response = await fetch('http://192.168.3.239:3000/api/chat', {
+      const response = await fetch('http://192.168.3.239:3000/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text, cartItems: items, history }),
       });
-      const data = await response.json();
 
-      if (data.actions?.length) {
-        for (const action of data.actions) {
-          if (action.action === 'add') {
-            const item = MENU_ITEMS.find((m) => m.id === action.itemId);
-            if (item) for (let i = 0; i < (action.quantity ?? 1); i++) addItem(item);
-          } else if (action.action === 'remove') {
-            const item = MENU_ITEMS.find((m) => m.id === action.itemId);
-            if (item) removeItem(item.id);
-          } else if (action.action === 'update') {
-            const item = MENU_ITEMS.find((m) => m.id === action.itemId);
-            if (item) updateQuantity(item.id, action.quantity);
-          } else if (action.action === 'clear') {
-            clearCart();
-          }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('no reader');
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+
+            if (data.type === 'actions') {
+              applyActions(data.actions);
+              // Stop typing indicator, add the response bubble (empty for now)
+              setLoading(false);
+              setMessages((prev) => [...prev, { id: assistantId, role: 'assistant', text: '', timestamp: new Date() }]);
+              setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+
+            } else if (data.type === 'delta') {
+              assistantText += data.text;
+              setMessages((prev) => prev.map((m) => m.id === assistantId ? { ...m, text: assistantText } : m));
+
+            } else if (data.type === 'done') {
+              setHistory((prev) => [
+                ...prev,
+                { role: 'user', content: text },
+                { role: 'assistant', content: assistantText },
+              ]);
+              setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 50);
+            }
+          } catch { /* ignore malformed lines */ }
         }
       }
-
-      const replyText = data.reply ?? 'Done!';
-      setMessages((prev) => [...prev, {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        text: replyText,
-        timestamp: new Date(),
-      }]);
-
-      // Append to history for next turn
-      setHistory((prev) => [
-        ...prev,
-        { role: 'user', content: text },
-        { role: 'assistant', content: replyText },
-      ]);
     } catch {
+      setLoading(false);
       setMessages((prev) => [...prev, {
-        id: (Date.now() + 1).toString(),
+        id: assistantId,
         role: 'assistant',
         text: "I'm having trouble connecting right now. Please try again in a moment.",
         timestamp: new Date(),
       }]);
     } finally {
       setLoading(false);
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     }
   };
 

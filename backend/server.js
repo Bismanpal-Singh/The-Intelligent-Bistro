@@ -127,76 +127,65 @@ const TOOLS = [
   },
 ];
 
-// ─── Chat endpoint ─────────────────────────────────────────────────────────────
-app.post('/api/chat', async (req, res) => {
-  const { message, cartItems = [], history = [] } = req.body;
+function buildMessages(history, cartContext, message) {
+  return [
+    ...history,
+    { role: 'user', content: `[Cart context — this is the live state of the cart, trust it over anything in history: ${cartContext}]\n\n${message}` },
+  ];
+}
 
-  if (!message || typeof message !== 'string') {
-    return res.status(400).json({ error: 'message is required' });
-  }
-
-  // Build cart context string to inject into the user turn
-  const cartContext = cartItems.length === 0
+function cartContextString(cartItems) {
+  return cartItems.length === 0
     ? 'The cart is currently empty.'
     : 'Current cart:\n' + cartItems.map((i) => `- ${i.name} x${i.quantity} ($${(i.price * i.quantity).toFixed(2)})`).join('\n');
+}
 
-  // Reconstruct message history — prior turns come first, then current message
-  const messages = [
-    ...history,
-    {
-      role: 'user',
-      content: `[Cart context: ${cartContext}]\n\n${message}`,
-    },
-  ];
+function extractActions(toolBlocks) {
+  const actions = [];
+  for (const block of toolBlocks) {
+    const { name, input } = block;
+    if (name !== 'clear_cart' && !MENU_IDS.includes(input.itemId)) continue;
+    if (name === 'add_to_cart') actions.push({ action: 'add', itemId: input.itemId, quantity: input.quantity ?? 1 });
+    else if (name === 'remove_from_cart') actions.push({ action: 'remove', itemId: input.itemId });
+    else if (name === 'update_quantity') actions.push({ action: 'update', itemId: input.itemId, quantity: input.quantity });
+    else if (name === 'clear_cart') actions.push({ action: 'clear' });
+  }
+  return actions;
+}
+
+// ─── Streaming chat endpoint ───────────────────────────────────────────────────
+// Phase 1: tool calls only  → sends { type:'actions', actions:[...] } immediately
+// Phase 2: text only, streamed → sends { type:'delta', text:'...' } per chunk
+app.post('/api/chat/stream', async (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  const { message, cartItems = [], history = [] } = req.body;
+  if (!message) { res.end(); return; }
+
+  const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
 
   try {
     const actions = [];
-    let currentMessages = messages;
-    let reply = '';
+    let currentMessages = buildMessages(history, cartContextString(cartItems), message);
 
-    // Agentic loop: keep going while Claude wants to use tools
+    // Phase 1: tool calls only
     for (let turn = 0; turn < 5; turn++) {
       const response = await client.messages.create({
-        model: 'claude-opus-4-7',
-        max_tokens: 1024,
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 512,
         system: SYSTEM_PROMPT,
         tools: TOOLS,
         messages: currentMessages,
       });
 
-      const toolUseBlocks = [];
+      const toolBlocks = response.content.filter((b) => b.type === 'tool_use');
+      actions.push(...extractActions(toolBlocks));
 
-      for (const block of response.content) {
-        if (block.type === 'text') {
-          reply += block.text;
-        } else if (block.type === 'tool_use') {
-          toolUseBlocks.push(block);
-          const { name, input } = block;
+      if (response.stop_reason !== 'tool_use' || toolBlocks.length === 0) break;
 
-          if (name !== 'clear_cart' && !MENU_IDS.includes(input.itemId)) continue;
-
-          if (name === 'add_to_cart') {
-            actions.push({ action: 'add', itemId: input.itemId, quantity: input.quantity ?? 1 });
-          } else if (name === 'remove_from_cart') {
-            actions.push({ action: 'remove', itemId: input.itemId });
-          } else if (name === 'update_quantity') {
-            actions.push({ action: 'update', itemId: input.itemId, quantity: input.quantity });
-          } else if (name === 'clear_cart') {
-            actions.push({ action: 'clear' });
-          }
-        }
-      }
-
-      // If Claude is done with tools, we have our final reply
-      if (response.stop_reason !== 'tool_use' || toolUseBlocks.length === 0) break;
-
-      // Otherwise feed tool results back so Claude can respond naturally
-      const toolResults = toolUseBlocks.map((b) => ({
-        type: 'tool_result',
-        tool_use_id: b.id,
-        content: 'Done.',
-      }));
-
+      const toolResults = toolBlocks.map((b) => ({ type: 'tool_result', tool_use_id: b.id, content: 'Done.' }));
       currentMessages = [
         ...currentMessages,
         { role: 'assistant', content: response.content },
@@ -204,10 +193,30 @@ app.post('/api/chat', async (req, res) => {
       ];
     }
 
-    res.json({ reply: reply.trim(), actions });
+    // Send cart actions immediately so the frontend can update the cart right away
+    send({ type: 'actions', actions });
+
+    // Phase 2: stream the conversational reply (no more tool calls allowed)
+    const stream = client.messages.stream({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 512,
+      system: SYSTEM_PROMPT,
+      tool_choice: { type: 'none' },
+      messages: currentMessages,
+    });
+
+    for await (const chunk of stream) {
+      if (chunk.type === 'content_block_delta' && chunk.delta.type === 'text_delta') {
+        send({ type: 'delta', text: chunk.delta.text });
+      }
+    }
+
+    send({ type: 'done' });
+    res.end();
   } catch (err) {
-    console.error('Anthropic error:', err.message);
-    res.status(500).json({ error: 'Failed to get response from AI' });
+    console.error('Stream error:', err.message);
+    send({ type: 'error' });
+    res.end();
   }
 });
 
