@@ -101,13 +101,16 @@ function TypingIndicator() {
   );
 }
 
+type HistoryEntry = { role: 'user' | 'assistant'; content: string };
+
 export default function ChatScreen() {
   const { colors } = useTheme();
   const [messages, setMessages] = useState<Message[]>([WELCOME]);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const flatListRef = useRef<FlatList>(null);
-  const { addItem, removeItem, clearCart, items } = useCartStore();
+  const { addItem, removeItem, updateQuantity, clearCart, items } = useCartStore();
   const inputBottom = useRef(new Animated.Value(TAB_BAR_HEIGHT)).current;
 
   useEffect(() => {
@@ -145,33 +148,44 @@ export default function ChatScreen() {
     setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
 
     try {
-      const response = await fetch('http://localhost:3000/api/chat', {
+      const response = await fetch('http://192.168.3.239:3000/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, cartItems: items }),
+        body: JSON.stringify({ message: text, cartItems: items, history }),
       });
       const data = await response.json();
 
       if (data.actions?.length) {
         for (const action of data.actions) {
           if (action.action === 'add') {
-            const item = MENU_ITEMS.find((m) => m.id === action.itemId || m.name.toLowerCase().includes((action.itemId ?? '').toLowerCase()));
+            const item = MENU_ITEMS.find((m) => m.id === action.itemId);
             if (item) for (let i = 0; i < (action.quantity ?? 1); i++) addItem(item);
           } else if (action.action === 'remove') {
-            const item = MENU_ITEMS.find((m) => m.id === action.itemId || m.name.toLowerCase().includes((action.itemId ?? '').toLowerCase()));
+            const item = MENU_ITEMS.find((m) => m.id === action.itemId);
             if (item) removeItem(item.id);
+          } else if (action.action === 'update') {
+            const item = MENU_ITEMS.find((m) => m.id === action.itemId);
+            if (item) updateQuantity(item.id, action.quantity);
           } else if (action.action === 'clear') {
             clearCart();
           }
         }
       }
 
+      const replyText = data.reply ?? 'Done!';
       setMessages((prev) => [...prev, {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        text: data.reply ?? 'Done!',
+        text: replyText,
         timestamp: new Date(),
       }]);
+
+      // Append to history for next turn
+      setHistory((prev) => [
+        ...prev,
+        { role: 'user', content: text },
+        { role: 'assistant', content: replyText },
+      ]);
     } catch {
       setMessages((prev) => [...prev, {
         id: (Date.now() + 1).toString(),
