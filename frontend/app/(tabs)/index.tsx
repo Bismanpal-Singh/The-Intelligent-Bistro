@@ -287,7 +287,7 @@ export default function MenuScreen() {
       </View>
 
       {/* ── Dietary Filters ── */}
-      <View style={styles.filterRow}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
         {DIETARY_FILTERS.map((f) => {
           const active = activeFilters.includes(f.id);
           return (
@@ -314,7 +314,7 @@ export default function MenuScreen() {
             <Text style={[styles.clearFiltersText, { color: colors.creamMuted }]}>Clear</Text>
           </TouchableOpacity>
         )}
-      </View>
+      </ScrollView>
     </View>
   );
 
@@ -400,7 +400,7 @@ const styles = StyleSheet.create({
   tabIndicator: { position: 'absolute', bottom: 0, left: 16, right: 16, height: 2, borderRadius: 1 },
 
   // Dietary filters
-  filterRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: Spacing.md, paddingBottom: Spacing.sm, flexWrap: 'wrap' },
+  filterRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: Spacing.md, paddingBottom: Spacing.sm, paddingRight: Spacing.lg },
   filterChip: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderRadius: 100, paddingHorizontal: 12, paddingVertical: 6 },
   filterEmoji: { fontSize: 12 },
   filterLabel: { fontSize: 12, letterSpacing: 0.2 },
