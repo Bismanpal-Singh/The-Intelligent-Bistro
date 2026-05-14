@@ -18,6 +18,10 @@ import {
   CormorantGaramond_600SemiBold,
   CormorantGaramond_400Regular_Italic,
 } from '@expo-google-fonts/cormorant-garamond';
+import {
+  Fraunces_700Bold,
+  Fraunces_400Regular_Italic,
+} from '@expo-google-fonts/fraunces';
 import * as SplashScreen from 'expo-splash-screen';
 import { ThemeProvider, useTheme } from '../context/ThemeContext';
 
@@ -44,6 +48,8 @@ export default function RootLayout() {
     CormorantGaramond_700Bold,
     CormorantGaramond_600SemiBold,
     CormorantGaramond_400Regular_Italic,
+    Fraunces_700Bold,
+    Fraunces_400Regular_Italic,
   });
 
   useEffect(() => {

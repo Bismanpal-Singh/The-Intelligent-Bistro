@@ -41,15 +41,16 @@ export const LightColors = {
 export type ThemeColors = typeof DarkColors;
 
 export const Fonts = {
-  // Cormorant Garamond — used for the main brand title only
+  // Cormorant Garamond — brand title only
   display: 'CormorantGaramond_700Bold',
   displaySemi: 'CormorantGaramond_600SemiBold',
   displayItalic: 'CormorantGaramond_400Regular_Italic',
-  // Playfair Display — used for headings and item names
-  serif: 'PlayfairDisplay_700Bold',
-  serifItalic: 'PlayfairDisplay_400Regular_Italic',
+  // Fraunces — food item names
+  serif: 'Fraunces_700Bold',
+  serifItalic: 'Fraunces_400Regular_Italic',
+  // Playfair Display — secondary headings
   serifRegular: 'PlayfairDisplay_400Regular',
-  // DM Sans — used for all body/UI text
+  // DM Sans — all body/UI text
   sans: 'DMSans_400Regular',
   sansMedium: 'DMSans_500Medium',
   sansBold: 'DMSans_700Bold',
