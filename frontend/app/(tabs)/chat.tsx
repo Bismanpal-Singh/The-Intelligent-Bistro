@@ -11,7 +11,9 @@ import { useCartStore } from '../../store/cartStore';
 import { MENU_ITEMS } from '../../data/menu';
 import BistroAvatar, { BistroAvatarLarge } from '../../components/BistroAvatar';
 
-// Tab bar height to offset bottom input
+// ── Update this to your machine's local IP when running on a physical device ──
+const API_BASE = 'http://192.168.3.239:3000';
+
 const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 85 : 65;
 
 type Message = {
@@ -204,7 +206,7 @@ export default function ChatScreen() {
 
     await new Promise<void>((resolve) => {
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', 'http://192.168.3.239:3000/api/chat/stream');
+      xhr.open('POST', `${API_BASE}/api/chat/stream`);
       xhr.setRequestHeader('Content-Type', 'application/json');
 
       let processed = 0;
