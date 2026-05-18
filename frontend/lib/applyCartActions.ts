@@ -90,6 +90,15 @@ export function cartContextForVoice(): string {
   );
 }
 
+/** Tool result text — model must read this before speaking. */
+export function cartToolResultForVoice(): string {
+  const cart = cartContextForVoice();
+  if (cart.startsWith('The cart is currently empty')) {
+    return `TOOL_RESULT: No change — cart is still empty.\n${cart}`;
+  }
+  return `TOOL_RESULT: Success.\n${cart}`;
+}
+
 export function cartSummaryForVoice(): string {
   return cartContextForVoice();
 }

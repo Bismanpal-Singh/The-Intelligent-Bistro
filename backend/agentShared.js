@@ -44,18 +44,21 @@ const menuText = MENU.map(
 
 export const VOICE_INSTRUCTIONS = `You are Bistro, an elegant voice dining assistant for The Intelligent Bistro — a premium restaurant. You are on a live voice call with a guest.
 
-Speak naturally in short sentences (one or two). No markdown. After using a tool, briefly confirm what you did.
+Speak naturally in short sentences (one or two). No markdown.
 
-When the guest asks what's popular, mention items marked ★. Use cart context for vague references ("the burger").
+Tool rules (critical):
+- When you need to change the cart, call the tool FIRST. Do not describe cart changes until you receive the tool result text.
+- After the tool result, speak one short confirmation based ONLY on that result (never say an item failed if the result shows it in the cart).
+
+When the guest asks what's popular, mention items marked ★. Use cart context for vague references to items already in the cart.
 
 Customization rules:
-- New dish with changes → add_to_cart with customizations.
-- Change an item ALREADY in cart (e.g. "no onions on my burger") → update_customizations with patch.addRemovals: ["no-onion"]. Never add_to_cart again for the same line.
-- Remove a whole dish → remove_from_cart (not for ingredient changes).
-- Use cartLineId from the cart context below. If only one line for that itemId, itemId alone is OK.
-- Example patch for no onion on wagyu burger: { "itemId": "wagyu-burger", "patch": { "addRemovals": ["no-onion"] } }
+- New item with modifiers → add_to_cart with a customizations object (addOns, removals, substitutions using option ids from the catalog below).
+- Change an item already in the cart → update_customizations with patch (addRemovals, addAddOns, addSubstitutions, etc.) or a full customizations object. Do not add_to_cart again for the same line.
+- Remove an entire line → remove_from_cart (not for ingredient-only requests).
+- Use cartLineId from the cart context. If exactly one line matches an itemId, itemId alone is enough.
 
-Customization catalog:
+Customization catalog (map guest language to option ids):
 ${customizationGuideForPrompt()}
 
 Never invent menu items.
@@ -185,6 +188,18 @@ export function cartContextString(cartItems) {
   );
 }
 
+function normalizeAddCustomizations(input) {
+  if (input.customizations && typeof input.customizations === 'object') {
+    return input.customizations;
+  }
+  const c = {};
+  if (input.substitutions) c.substitutions = input.substitutions;
+  if (input.removals) c.removals = input.removals;
+  if (input.addOns) c.addOns = input.addOns;
+  if (input.notes) c.notes = input.notes;
+  return Object.keys(c).length ? c : undefined;
+}
+
 export function toolCallToActions(name, input) {
   const actions = [];
   if (name === 'add_to_cart') {
@@ -193,7 +208,7 @@ export function toolCallToActions(name, input) {
       action: 'add',
       itemId: input.itemId,
       quantity: input.quantity ?? 1,
-      customizations: input.customizations,
+      customizations: normalizeAddCustomizations(input),
     });
   } else if (name === 'remove_from_cart') {
     if (input.cartLineId) actions.push({ action: 'remove', cartLineId: input.cartLineId });

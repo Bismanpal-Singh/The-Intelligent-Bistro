@@ -2,7 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system/legacy';
 import { getVoiceWsUrl } from '../lib/wsBase';
-import { applyCartActions, cartContextForVoice, CartAction } from '../lib/applyCartActions';
+import {
+  applyCartActions,
+  cartToolResultForVoice,
+  CartAction,
+} from '../lib/applyCartActions';
 import { RealtimePlayback, stopPlayback } from '../lib/realtimePlayback';
 import {
   isMicRoute,
@@ -39,10 +43,12 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
   const wsRef = useRef<WebSocket | null>(null);
   const recordingLoopRef = useRef(false);
   const playbackRef = useRef(new RealtimePlayback());
-  const transcriptBuf = useRef('');
+  const userTranscriptBuf = useRef('');
+  const assistantTranscriptBuf = useRef('');
   const statusRef = useRef(status);
   const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const assistantTurnEndRef = useRef(false);
+  const dropAssistantAudioRef = useRef(false);
   const onTranscriptRef = useRef(onTranscript);
 
   statusRef.current = status;
@@ -159,7 +165,8 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
 
     setStatus('idle');
     setLiveTranscript('');
-    transcriptBuf.current = '';
+    userTranscriptBuf.current = '';
+    assistantTranscriptBuf.current = '';
   }, [clearThinkingTimer]);
 
   const disconnectRef = useRef(disconnect);
@@ -232,8 +239,8 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
           playbackRef.current.arm();
           void setAudioRoute('mic').then(() => {
             setStatus('listening');
+            userTranscriptBuf.current = '';
             setLiveTranscript('');
-            transcriptBuf.current = '';
           });
           break;
 
@@ -244,10 +251,18 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
           });
           break;
 
+        case 'discard_playback':
+          dropAssistantAudioRef.current = true;
+          playbackRef.current.interrupt();
+          playbackRef.current.arm();
+          break;
+
         case 'audio_delta': {
           clearThinkingTimer();
+          if (dropAssistantAudioRef.current) break;
           const audio = (msg.delta as string) || (msg.audio as string);
           if (audio) playbackRef.current.pushDelta(audio);
+          if (statusRef.current === 'thinking') setStatus('speaking');
           break;
         }
 
@@ -256,13 +271,28 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
           void onAssistantTurnEnd();
           break;
 
-        case 'transcript_delta':
-          transcriptBuf.current += msg.delta as string;
-          setLiveTranscript(transcriptBuf.current);
+        case 'user_transcript_delta':
+          userTranscriptBuf.current += msg.delta as string;
+          setLiveTranscript(userTranscriptBuf.current);
           break;
 
-        case 'transcript_done': {
-          const t = (msg.transcript as string) ?? transcriptBuf.current;
+        case 'user_transcript_done': {
+          const t = (msg.transcript as string) ?? userTranscriptBuf.current;
+          userTranscriptBuf.current = t;
+          setLiveTranscript(t);
+          break;
+        }
+
+        case 'assistant_transcript_delta':
+          dropAssistantAudioRef.current = false;
+          assistantTranscriptBuf.current += msg.delta as string;
+          setLastReply(assistantTranscriptBuf.current);
+          break;
+
+        case 'assistant_transcript_done': {
+          dropAssistantAudioRef.current = false;
+          const t = (msg.transcript as string) ?? assistantTranscriptBuf.current;
+          assistantTranscriptBuf.current = t;
           setLastReply(t);
           onTranscriptRef.current?.(t);
           break;
@@ -270,44 +300,58 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
 
         case 'function_call': {
           clearThinkingTimer();
+          dropAssistantAudioRef.current = true;
+          playbackRef.current.interrupt();
+          playbackRef.current.arm();
+          assistantTranscriptBuf.current = '';
+          setLastReply('');
+          setStatus('thinking');
           try {
             const actions = (msg.actions as CartAction[]) ?? [];
             const name = msg.name as string;
             if (__DEV__) console.log('[voice] tool', name, msg.arguments);
             if (actions.length) applyCartActions(actions);
             else if (__DEV__) console.warn('[voice] tool produced no cart actions', name);
-            const cartItems = useCartStore.getState().items;
-            syncCart();
             sendJson({
               type: 'function_result',
               callId: msg.callId,
-              output: cartContextForVoice(),
-              cartItems,
+              output: cartToolResultForVoice(),
+              cartItems: useCartStore.getState().items,
             });
           } catch (err) {
             if (__DEV__) console.warn('[voice] function_call error', err);
             sendJson({
               type: 'function_result',
               callId: msg.callId,
-              output: 'Cart update failed.',
+              output: 'TOOL_RESULT: Cart update failed on the app.',
               cartItems: useCartStore.getState().items,
             });
           }
-          if (statusRef.current === 'thinking') armThinkingTimeout();
+          armThinkingTimeout();
           break;
         }
 
         case 'response_done':
           clearThinkingTimer();
+          dropAssistantAudioRef.current = false;
           if (statusRef.current === 'thinking') armThinkingTimeout();
           break;
 
-        case 'error':
+        case 'error': {
+          const errMsg = (msg.message as string) ?? '';
+          const benign =
+            errMsg.toLowerCase().includes('cancellation failed') ||
+            errMsg.toLowerCase().includes('no active response');
+          if (benign) {
+            if (__DEV__) console.warn('[voice] ignored:', errMsg);
+            break;
+          }
           clearTimeout(connectTimeout);
           clearThinkingTimer();
-          setError((msg.message as string) ?? 'Voice session error');
+          setError(errMsg || 'Voice session error');
           setStatus('error');
           break;
+        }
 
         case 'closed':
           void disconnectRef.current();

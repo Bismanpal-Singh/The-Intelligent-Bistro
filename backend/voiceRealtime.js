@@ -10,6 +10,7 @@ import {
 const REALTIME_MODEL =
   process.env.OPENAI_REALTIME_MODEL ?? 'gpt-4o-mini-realtime-preview-2024-12-17';
 const REALTIME_VOICE = process.env.OPENAI_REALTIME_VOICE ?? 'alloy';
+const SESSION_UPDATE_TIMEOUT_MS = 4000;
 
 function openAIRealtimeUrl() {
   return `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(REALTIME_MODEL)}`;
@@ -37,7 +38,7 @@ function buildSessionUpdate(cartItems) {
             prefix_padding_ms: 300,
             silence_duration_ms: 600,
           },
-          transcription: { model: 'whisper-1' },
+          transcription: { model: 'whisper-1', language: 'en' },
         },
         output: {
           format: { type: 'audio/pcm', rate: 24000 },
@@ -47,6 +48,36 @@ function buildSessionUpdate(cartItems) {
       tools: toOpenAITools(),
     },
   };
+}
+
+function forwardUserTranscript(clientWs, event) {
+  if (event.delta) {
+    sendJson(clientWs, { type: 'user_transcript_delta', delta: event.delta });
+  }
+  if (event.transcript) {
+    sendJson(clientWs, { type: 'user_transcript_done', transcript: event.transcript });
+  }
+}
+
+function isBenignRealtimeError(message) {
+  const m = (message ?? '').toLowerCase();
+  return (
+    m.includes('cancellation failed') ||
+    m.includes('no active response') ||
+    m.includes('response_cancel')
+  );
+}
+
+function forwardAssistantTranscript(clientWs, event) {
+  if (event.delta) {
+    sendJson(clientWs, { type: 'assistant_transcript_delta', delta: event.delta });
+  }
+  if (event.transcript) {
+    sendJson(clientWs, {
+      type: 'assistant_transcript_done',
+      transcript: event.transcript,
+    });
+  }
 }
 
 function handleClientConnection(clientWs) {
@@ -71,6 +102,8 @@ function handleClientConnection(clientWs) {
   const pendingToolResults = new Map();
   let sessionUpdatePromise = null;
   let resolveSessionUpdate = null;
+  /** True while the model is streaming audio for the current response. */
+  let responseHasAudio = false;
 
   const closeAll = (reason) => {
     if (reason) sendJson(clientWs, { type: 'closed', message: reason });
@@ -95,7 +128,11 @@ function handleClientConnection(clientWs) {
     openaiWs.send(JSON.stringify(buildSessionUpdate(pendingCart)));
   };
 
-  const waitForSessionUpdate = () => sessionUpdatePromise ?? Promise.resolve();
+  const waitForSessionUpdate = () =>
+    Promise.race([
+      sessionUpdatePromise ?? Promise.resolve(),
+      new Promise((resolve) => setTimeout(resolve, SESSION_UPDATE_TIMEOUT_MS)),
+    ]);
 
   const connectOpenAI = () => {
     if (openaiWs && openaiWs.readyState !== WebSocket.CLOSED) return;
@@ -110,28 +147,19 @@ function handleClientConnection(clientWs) {
       pushSessionUpdate();
     });
 
-      openaiWs.on('message', async (raw) => {
-        let event;
-        try {
-          event = JSON.parse(raw.toString());
-        } catch {
-          return;
-        }
+    openaiWs.on('message', async (raw) => {
+      let event;
+      try {
+        event = JSON.parse(raw.toString());
+      } catch {
+        return;
+      }
 
-        if (
-          process.env.VOICE_DEBUG === '1' &&
-          (event.type?.includes('audio') || event.type === 'response.done')
-        ) {
-          const audioLen =
-            typeof event.delta === 'string'
-              ? event.delta.length
-              : typeof event.audio === 'string'
-                ? event.audio.length
-                : 0;
-          console.log('[voice] OpenAI →', event.type, audioLen ? `${audioLen}b64` : '');
-        }
+      if (process.env.VOICE_DEBUG === '1' && event.type?.includes('transcript')) {
+        console.log('[voice] OpenAI transcript event:', event.type);
+      }
 
-        switch (event.type) {
+      switch (event.type) {
         case 'session.updated':
           if (resolveSessionUpdate) {
             resolveSessionUpdate();
@@ -164,7 +192,10 @@ function handleClientConnection(clientWs) {
               : typeof event.audio === 'string'
                 ? event.audio
                 : null;
-          if (delta) sendJson(clientWs, { type: 'audio_delta', delta });
+          if (delta) {
+            responseHasAudio = true;
+            sendJson(clientWs, { type: 'audio_delta', delta });
+          }
           break;
         }
 
@@ -173,84 +204,119 @@ function handleClientConnection(clientWs) {
           sendJson(clientWs, { type: 'audio_done' });
           break;
 
+        case 'conversation.item.input_audio_transcription.delta':
+          forwardUserTranscript(clientWs, event);
+          break;
+
+        case 'conversation.item.input_audio_transcription.completed':
+          forwardUserTranscript(clientWs, event);
+          break;
+
+        case 'conversation.item.input_audio_transcription.failed':
+          console.warn('[voice] user transcription failed:', event.error);
+          break;
+
         case 'response.audio_transcript.delta':
         case 'response.output_audio_transcript.delta':
-          if (event.delta) {
-            sendJson(clientWs, { type: 'transcript_delta', delta: event.delta });
-          }
+          forwardAssistantTranscript(clientWs, event);
           break;
 
         case 'response.audio_transcript.done':
         case 'response.output_audio_transcript.done':
-          if (event.transcript) {
-            sendJson(clientWs, { type: 'transcript_done', transcript: event.transcript });
-          }
+          forwardAssistantTranscript(clientWs, event);
           break;
 
-          case 'response.function_call_arguments.done': {
-            const callId = event.call_id;
-            const name = event.name;
-            let args = {};
-            try {
-              args = JSON.parse(event.arguments || '{}');
-            } catch {
-              args = {};
-            }
-            const actions = toolCallToActions(name, args);
-            console.log('[voice] tool call', name, JSON.stringify(args));
-            sendJson(clientWs, {
-              type: 'function_call',
-              callId,
-              name,
-              arguments: args,
-              actions,
+        case 'response.function_call_arguments.done': {
+          const callId = event.call_id;
+          const name = event.name;
+          let args = {};
+          try {
+            args = JSON.parse(event.arguments || '{}');
+          } catch {
+            args = {};
+          }
+          const actions = toolCallToActions(name, args);
+          console.log('[voice] tool call', name, JSON.stringify(args));
+
+          if (responseHasAudio) {
+            sendJson(clientWs, { type: 'discard_playback' });
+          }
+          responseHasAudio = false;
+
+          sendJson(clientWs, {
+            type: 'function_call',
+            callId,
+            name,
+            arguments: args,
+            actions,
+          });
+
+          void (async () => {
+            const output = await new Promise((resolve) => {
+              const timeout = setTimeout(() => {
+                pendingToolResults.delete(callId);
+                resolve('TOOL_RESULT: Cart update timed out on the app.');
+              }, 8000);
+              pendingToolResults.set(callId, {
+                resolve: (text) => {
+                  clearTimeout(timeout);
+                  resolve(text);
+                },
+              });
             });
 
-            void (async () => {
-              const output = await new Promise((resolve) => {
-                const timeout = setTimeout(() => {
-                  pendingToolResults.delete(callId);
-                  resolve('Cart update timed out.');
-                }, 5000);
-                pendingToolResults.set(callId, {
-                  resolve: (text) => {
-                    clearTimeout(timeout);
-                    resolve(text);
-                  },
-                });
-              });
+            if (openaiWs?.readyState !== WebSocket.OPEN) return;
 
-              if (openaiWs?.readyState !== WebSocket.OPEN) return;
+            if (pendingCart.length) {
+              pushSessionUpdate();
               await waitForSessionUpdate();
-              openaiWs.send(
-                JSON.stringify({
-                  type: 'conversation.item.create',
-                  item: {
-                    type: 'function_call_output',
-                    call_id: callId,
-                    output,
-                  },
-                })
-              );
-              openaiWs.send(JSON.stringify({ type: 'response.create' }));
-            })();
-            break;
-          }
+            }
+
+            openaiWs.send(
+              JSON.stringify({
+                type: 'conversation.item.create',
+                item: {
+                  type: 'function_call_output',
+                  call_id: callId,
+                  output,
+                },
+              })
+            );
+            openaiWs.send(JSON.stringify({ type: 'response.create' }));
+          })();
+          break;
+        }
+
+        case 'response.created':
+          responseHasAudio = false;
+          break;
 
         case 'response.done':
+          responseHasAudio = false;
           sendJson(clientWs, { type: 'response_done' });
           break;
 
-        case 'error':
+        case 'error': {
+          const errMsg = event.error?.message ?? 'Realtime API error';
+          if (isBenignRealtimeError(errMsg)) {
+            console.warn('[voice] ignored:', errMsg);
+            break;
+          }
           console.error('OpenAI Realtime error:', event.error);
           awaitingSessionUpdate = false;
-          sendJson(clientWs, {
-            type: 'error',
-            message: event.error?.message ?? 'Realtime API error',
-          });
+          sendJson(clientWs, { type: 'error', message: errMsg });
           break;
+        }
 
         default:
+          if (event.type?.includes('input_audio_transcription')) {
+            forwardUserTranscript(clientWs, event);
+          } else if (
+            event.type?.includes('output_audio_transcript') ||
+            event.type?.includes('audio_transcript')
+          ) {
+            forwardAssistantTranscript(clientWs, event);
+          }
           break;
       }
     });
@@ -325,8 +391,6 @@ function handleClientConnection(clientWs) {
       return;
     }
 
-    console.log('[voice] Client →', msg.type);
-
     switch (msg.type) {
       case 'start':
         pendingCart = msg.cartItems ?? [];
@@ -340,10 +404,9 @@ function handleClientConnection(clientWs) {
 
       case 'function_result': {
         if (msg.cartItems) pendingCart = msg.cartItems;
-        pushSessionUpdate();
         const pending = pendingToolResults.get(msg.callId);
         if (pending) {
-          pending.resolve(msg.output ?? 'Done.');
+          pending.resolve(msg.output ?? 'TOOL_RESULT: Done.');
           pendingToolResults.delete(msg.callId);
         }
         break;

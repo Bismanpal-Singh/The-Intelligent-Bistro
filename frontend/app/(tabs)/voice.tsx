@@ -125,14 +125,16 @@ export default function VoiceScreen() {
           {STATUS_LABEL[status]}
         </Text>
 
-        {liveTranscript ? (
+        {liveTranscript || status === 'listening' || status === 'thinking' ? (
           <View style={[styles.captionCard, { backgroundColor: colors.bgCard, borderColor: colors.borderSubtle }]}>
             <Text style={[styles.captionLabel, { color: colors.creamMuted }]}>You</Text>
-            <Text style={[styles.captionText, { color: colors.cream }]}>{liveTranscript}</Text>
+            <Text style={[styles.captionText, { color: colors.cream }]}>
+              {liveTranscript || (status === 'listening' ? '…' : '')}
+            </Text>
           </View>
         ) : null}
 
-        {lastReply && status !== 'listening' ? (
+        {lastReply ? (
           <View style={[styles.captionCard, { backgroundColor: colors.bgElevated, borderColor: colors.borderSubtle }]}>
             <Text style={[styles.captionLabel, { color: colors.goldDim }]}>Bistro</Text>
             <Text style={[styles.captionText, { color: colors.cream }]}>{lastReply}</Text>
