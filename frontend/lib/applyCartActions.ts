@@ -1,4 +1,5 @@
 import { MENU_ITEMS } from '../data/menu';
+import { formatCartCustomizations, lineUnitPrice } from '../data/customizations';
 import { useCartStore, CartItem } from '../store/cartStore';
 
 export type CartAction = {
@@ -37,7 +38,8 @@ export function applyCartActions(actions: CartAction[]) {
           : null);
       if (!lineId) continue;
       const cartStore = useCartStore.getState();
-      if (action.patch) cartStore.patchCustomizations(lineId, action.patch as never);
+      const patch = normalizePatch(action.patch);
+      if (patch) cartStore.patchCustomizations(lineId, patch);
       else if (action.customizations) cartStore.updateCustomizations(lineId, action.customizations);
     } else if (action.action === 'clear') {
       store.clearCart();
@@ -45,8 +47,49 @@ export function applyCartActions(actions: CartAction[]) {
   }
 }
 
-export function cartSummaryForVoice(): string {
+function normalizePatch(patch?: Record<string, unknown>) {
+  if (!patch) return undefined;
+  const p = { ...patch };
+  if (p.removals && !p.addRemovals) {
+    p.addRemovals = p.removals;
+    delete p.removals;
+  }
+  if (p.addOns && !p.addAddOns) {
+    p.addAddOns = p.addOns;
+    delete p.addOns;
+  }
+  if (p.substitutions && !p.addSubstitutions) {
+    p.addSubstitutions = p.substitutions;
+    delete p.substitutions;
+  }
+  return p;
+}
+
+/** Full cart snapshot for the model (matches backend cartContextString). */
+export function cartContextForVoice(): string {
   const items = useCartStore.getState().items;
-  if (!items.length) return 'Cart is now empty.';
-  return `Cart updated. ${items.length} line(s): ${items.map((i) => `${i.name} x${i.quantity}`).join(', ')}.`;
+  if (!items.length) return 'The cart is currently empty.';
+  return (
+    'Current cart:\n' +
+    items
+      .map((i) => {
+        const human = formatCartCustomizations(i.itemId, i.customizations ?? {});
+        const unit = lineUnitPrice(i.price, i.itemId, i.customizations ?? {});
+        const lineTotal = unit * i.quantity;
+        const c = human ? ` | ${human}` : '';
+        const ids: string[] = [];
+        const cus = i.customizations ?? {};
+        if (cus.removals?.length) ids.push(`removalIds: [${cus.removals.join(', ')}]`);
+        if (cus.addOns?.length) ids.push(`addOnIds: [${cus.addOns.join(', ')}]`);
+        if (cus.substitutions?.length) ids.push(`substitutionIds: [${cus.substitutions.join(', ')}]`);
+        if (cus.notes) ids.push(`note: ${cus.notes}`);
+        const idPart = ids.length ? ` | ${ids.join(' | ')}` : '';
+        return `- ${i.name} x${i.quantity}${c}${idPart} [cartLineId: ${i.cartLineId}, itemId: ${i.itemId}] — $${lineTotal.toFixed(2)}`;
+      })
+      .join('\n')
+  );
+}
+
+export function cartSummaryForVoice(): string {
+  return cartContextForVoice();
 }

@@ -69,6 +69,8 @@ function handleClientConnection(clientWs) {
   let pendingCart = [];
   /** @type {Map<string, { resolve: (o: string) => void }>} */
   const pendingToolResults = new Map();
+  let sessionUpdatePromise = null;
+  let resolveSessionUpdate = null;
 
   const closeAll = (reason) => {
     if (reason) sendJson(clientWs, { type: 'closed', message: reason });
@@ -85,11 +87,15 @@ function handleClientConnection(clientWs) {
   };
 
   const pushSessionUpdate = () => {
-    if (openaiWs?.readyState === WebSocket.OPEN) {
-      awaitingSessionUpdate = true;
-      openaiWs.send(JSON.stringify(buildSessionUpdate(pendingCart)));
-    }
+    if (openaiWs?.readyState !== WebSocket.OPEN) return;
+    awaitingSessionUpdate = true;
+    sessionUpdatePromise = new Promise((resolve) => {
+      resolveSessionUpdate = resolve;
+    });
+    openaiWs.send(JSON.stringify(buildSessionUpdate(pendingCart)));
   };
+
+  const waitForSessionUpdate = () => sessionUpdatePromise ?? Promise.resolve();
 
   const connectOpenAI = () => {
     if (openaiWs && openaiWs.readyState !== WebSocket.CLOSED) return;
@@ -127,11 +133,18 @@ function handleClientConnection(clientWs) {
 
         switch (event.type) {
         case 'session.updated':
+          if (resolveSessionUpdate) {
+            resolveSessionUpdate();
+            resolveSessionUpdate = null;
+            sessionUpdatePromise = null;
+          }
           if (awaitingSessionUpdate || !sessionReady) {
             awaitingSessionUpdate = false;
-            sessionReady = true;
-            console.log('[voice] Session ready');
-            sendJson(clientWs, { type: 'ready' });
+            if (!sessionReady) {
+              sessionReady = true;
+              console.log('[voice] Session ready');
+              sendJson(clientWs, { type: 'ready' });
+            }
           }
           break;
 
@@ -184,6 +197,7 @@ function handleClientConnection(clientWs) {
               args = {};
             }
             const actions = toolCallToActions(name, args);
+            console.log('[voice] tool call', name, JSON.stringify(args));
             sendJson(clientWs, {
               type: 'function_call',
               callId,
@@ -196,7 +210,7 @@ function handleClientConnection(clientWs) {
               const output = await new Promise((resolve) => {
                 const timeout = setTimeout(() => {
                   pendingToolResults.delete(callId);
-                  resolve('Cart update applied.');
+                  resolve('Cart update timed out.');
                 }, 5000);
                 pendingToolResults.set(callId, {
                   resolve: (text) => {
@@ -207,6 +221,7 @@ function handleClientConnection(clientWs) {
               });
 
               if (openaiWs?.readyState !== WebSocket.OPEN) return;
+              await waitForSessionUpdate();
               openaiWs.send(
                 JSON.stringify({
                   type: 'conversation.item.create',
@@ -324,6 +339,8 @@ function handleClientConnection(clientWs) {
         break;
 
       case 'function_result': {
+        if (msg.cartItems) pendingCart = msg.cartItems;
+        pushSessionUpdate();
         const pending = pendingToolResults.get(msg.callId);
         if (pending) {
           pending.resolve(msg.output ?? 'Done.');

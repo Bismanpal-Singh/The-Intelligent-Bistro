@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system/legacy';
 import { getVoiceWsUrl } from '../lib/wsBase';
-import { applyCartActions, cartSummaryForVoice, CartAction } from '../lib/applyCartActions';
+import { applyCartActions, cartContextForVoice, CartAction } from '../lib/applyCartActions';
 import { RealtimePlayback, stopPlayback } from '../lib/realtimePlayback';
 import {
   isMicRoute,
@@ -272,18 +272,25 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
           clearThinkingTimer();
           try {
             const actions = (msg.actions as CartAction[]) ?? [];
+            const name = msg.name as string;
+            if (__DEV__) console.log('[voice] tool', name, msg.arguments);
             if (actions.length) applyCartActions(actions);
+            else if (__DEV__) console.warn('[voice] tool produced no cart actions', name);
+            const cartItems = useCartStore.getState().items;
             syncCart();
             sendJson({
               type: 'function_result',
               callId: msg.callId,
-              output: cartSummaryForVoice(),
+              output: cartContextForVoice(),
+              cartItems,
             });
           } catch (err) {
+            if (__DEV__) console.warn('[voice] function_call error', err);
             sendJson({
               type: 'function_result',
               callId: msg.callId,
               output: 'Cart update failed.',
+              cartItems: useCartStore.getState().items,
             });
           }
           if (statusRef.current === 'thinking') armThinkingTimeout();

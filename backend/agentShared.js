@@ -50,9 +50,10 @@ When the guest asks what's popular, mention items marked ★. Use cart context f
 
 Customization rules:
 - New dish with changes → add_to_cart with customizations.
-- Change an item already in cart → update_customizations with patch on cartLineId.
-- Remove a whole dish → remove_from_cart.
-- If only one line exists for a dish, itemId is enough for update_customizations.
+- Change an item ALREADY in cart (e.g. "no onions on my burger") → update_customizations with patch.addRemovals: ["no-onion"]. Never add_to_cart again for the same line.
+- Remove a whole dish → remove_from_cart (not for ingredient changes).
+- Use cartLineId from the cart context below. If only one line for that itemId, itemId alone is OK.
+- Example patch for no onion on wagyu burger: { "itemId": "wagyu-burger", "patch": { "addRemovals": ["no-onion"] } }
 
 Customization catalog:
 ${customizationGuideForPrompt()}
@@ -204,7 +205,7 @@ export function toolCallToActions(name, input) {
     if (input.cartLineId) payload.cartLineId = input.cartLineId;
     else if (input.itemId && MENU_IDS.includes(input.itemId)) payload.itemId = input.itemId;
     else return actions;
-    if (input.patch) payload.patch = input.patch;
+    if (input.patch) payload.patch = normalizeCustomizationPatch(input.patch);
     if (input.customizations) payload.customizations = input.customizations;
     if (payload.patch || payload.customizations) actions.push(payload);
   } else if (name === 'update_quantity') {
@@ -217,4 +218,23 @@ export function toolCallToActions(name, input) {
     actions.push({ action: 'clear' });
   }
   return actions;
+}
+
+/** Models often send removals/addOns instead of addRemovals/addAddOns — normalize. */
+function normalizeCustomizationPatch(patch) {
+  if (!patch || typeof patch !== 'object') return patch;
+  const p = { ...patch };
+  if (p.removals && !p.addRemovals) {
+    p.addRemovals = p.removals;
+    delete p.removals;
+  }
+  if (p.addOns && !p.addAddOns) {
+    p.addAddOns = p.addOns;
+    delete p.addOns;
+  }
+  if (p.substitutions && !p.addSubstitutions) {
+    p.addSubstitutions = p.substitutions;
+    delete p.substitutions;
+  }
+  return p;
 }
