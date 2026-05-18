@@ -9,7 +9,7 @@ import {
 } from '../lib/applyCartActions';
 import { RealtimePlayback, stopPlayback } from '../lib/realtimePlayback';
 import {
-  ensureVoiceSession,
+  ensureMicCaptureMode,
   isMicRoute,
   registerActiveRecording,
   resetVoiceAudioSession,
@@ -54,6 +54,9 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
   const listeningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const assistantTurnEndRef = useRef(false);
   const dropAssistantAudioRef = useRef(false);
+  /** Hide Bistro caption until audio plays; then reveal in sync with speaker. */
+  const holdCaptionForAudioRef = useRef(false);
+  const assistantSpeakerRouteRef = useRef(false);
   const onTranscriptRef = useRef(onTranscript);
 
   statusRef.current = status;
@@ -154,11 +157,23 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
     if (assistantTurnEndRef.current) return;
     assistantTurnEndRef.current = true;
     try {
+      playbackRef.current.setCaptionOptions({
+        getCaption: () => assistantTranscriptBuf.current,
+        onCaptionUpdate: (visible) => setLastReply(visible),
+      });
+
       if (playbackRef.current.hasAudio()) {
-        setStatus('speaking');
-        await playbackRef.current.playBuffered();
-        await new Promise((r) => setTimeout(r, 150));
+        if (statusRef.current === 'thinking') setStatus('speaking');
+        await playbackRef.current.finish();
+        if (assistantTranscriptBuf.current) {
+          setLastReply(assistantTranscriptBuf.current);
+        }
+        await new Promise((r) => setTimeout(r, 80));
+      } else if (assistantTranscriptBuf.current) {
+        setLastReply(assistantTranscriptBuf.current);
       }
+      holdCaptionForAudioRef.current = false;
+      assistantSpeakerRouteRef.current = false;
       clearListeningTimer();
       await setAudioRoute('mic');
       if (statusRef.current !== 'idle' && statusRef.current !== 'error') {
@@ -192,6 +207,8 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
     setLiveTranscript('');
     userTranscriptBuf.current = '';
     assistantTranscriptBuf.current = '';
+    holdCaptionForAudioRef.current = false;
+    assistantSpeakerRouteRef.current = false;
   }, [clearThinkingTimer, clearListeningTimer]);
 
   const disconnectRef = useRef(disconnect);
@@ -213,7 +230,7 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
     }
 
     await Audio.setIsEnabledAsync(true);
-    await ensureVoiceSession();
+    await ensureMicCaptureMode();
 
     const ws = new WebSocket(getVoiceWsUrl());
     wsRef.current = ws;
@@ -248,6 +265,7 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
           clearTimeout(connectTimeout);
           clearThinkingTimer();
           playbackRef.current.arm();
+          assistantSpeakerRouteRef.current = false;
           void setAudioRoute('mic').then(() => {
             setStatus('ready');
             recordLoop();
@@ -263,6 +281,7 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
           assistantTurnEndRef.current = false;
           playbackRef.current.interrupt();
           playbackRef.current.arm();
+          assistantSpeakerRouteRef.current = false;
           void setAudioRoute('mic').then(() => {
             setStatus('listening');
             userTranscriptBuf.current = '';
@@ -279,6 +298,8 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
 
         case 'discard_playback':
           dropAssistantAudioRef.current = true;
+          holdCaptionForAudioRef.current = false;
+          assistantSpeakerRouteRef.current = false;
           playbackRef.current.interrupt();
           playbackRef.current.arm();
           break;
@@ -288,7 +309,18 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
           if (dropAssistantAudioRef.current) break;
           const audio = (msg.delta as string) || (msg.audio as string);
           if (audio) {
-            void setAudioRoute('assistant');
+            if (!holdCaptionForAudioRef.current) {
+              holdCaptionForAudioRef.current = true;
+              setLastReply('');
+            }
+            if (!assistantSpeakerRouteRef.current) {
+              assistantSpeakerRouteRef.current = true;
+              void setAudioRoute('assistant');
+            }
+            playbackRef.current.setCaptionOptions({
+              getCaption: () => assistantTranscriptBuf.current,
+              onCaptionUpdate: (visible) => setLastReply(visible),
+            });
             playbackRef.current.pushDelta(audio);
           }
           if (statusRef.current === 'thinking') setStatus('speaking');
@@ -315,14 +347,16 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
         case 'assistant_transcript_delta':
           dropAssistantAudioRef.current = false;
           assistantTranscriptBuf.current += msg.delta as string;
-          setLastReply(assistantTranscriptBuf.current);
+          if (!holdCaptionForAudioRef.current) {
+            setLastReply(assistantTranscriptBuf.current);
+          }
           break;
 
         case 'assistant_transcript_done': {
           dropAssistantAudioRef.current = false;
           const t = (msg.transcript as string) ?? assistantTranscriptBuf.current;
           assistantTranscriptBuf.current = t;
-          setLastReply(t);
+          if (!holdCaptionForAudioRef.current) setLastReply(t);
           onTranscriptRef.current?.(t);
           break;
         }
@@ -330,9 +364,10 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
         case 'function_call': {
           clearThinkingTimer();
           dropAssistantAudioRef.current = true;
+          holdCaptionForAudioRef.current = false;
+          assistantSpeakerRouteRef.current = false;
           playbackRef.current.interrupt();
           playbackRef.current.arm();
-          void setAudioRoute('assistant');
           assistantTranscriptBuf.current = '';
           setLastReply('');
           setStatus('thinking');

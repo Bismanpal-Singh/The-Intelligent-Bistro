@@ -134,10 +134,12 @@ export default function VoiceScreen() {
           </View>
         ) : null}
 
-        {lastReply ? (
+        {lastReply || status === 'speaking' ? (
           <View style={[styles.captionCard, { backgroundColor: colors.bgElevated, borderColor: colors.borderSubtle }]}>
             <Text style={[styles.captionLabel, { color: colors.goldDim }]}>Bistro</Text>
-            <Text style={[styles.captionText, { color: colors.cream }]}>{lastReply}</Text>
+            <Text style={[styles.captionText, { color: colors.cream }]}>
+              {lastReply || '…'}
+            </Text>
           </View>
         ) : null}
 

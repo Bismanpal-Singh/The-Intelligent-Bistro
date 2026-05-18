@@ -6,9 +6,26 @@ type StoppableRecording = {
   stopAndUnloadAsync: () => Promise<unknown>;
 };
 
-/** Play + record for the whole voice call — never flip allowsRecordingIOS off (iOS breaks prepare). */
-const VOICE_SESSION_MODE = {
+/**
+ * iOS tradeoff:
+ * - allowsRecordingIOS: true  → mic works, playback often uses earpiece
+ * - allowsRecordingIOS: false → loudspeaker, but Recording.prepare fails if flipped mid-chunk
+ *
+ * We switch modes only inside runAudioExclusive, always stop the recorder first, and
+ * wait before re-enabling capture.
+ */
+const MIC_CAPTURE_MODE = {
   allowsRecordingIOS: true,
+  playsInSilentModeIOS: true,
+  staysActiveInBackground: true,
+  interruptionModeIOS: InterruptionModeIOS.DuckOthers,
+  interruptionModeAndroid: InterruptionModeAndroid.DuckOthers,
+  shouldDuckAndroid: true,
+  playThroughEarpieceAndroid: false,
+} as const;
+
+const SPEAKER_PLAYBACK_MODE = {
+  allowsRecordingIOS: false,
   playsInSilentModeIOS: true,
   staysActiveInBackground: true,
   interruptionModeIOS: InterruptionModeIOS.DuckOthers,
@@ -22,7 +39,10 @@ let sessionReady = false;
 let chain: Promise<void> = Promise.resolve();
 let activeRecording: StoppableRecording | null = null;
 
-const MIC_SETTLE_MS = 200;
+const MIC_SETTLE_MS = 120;
+const SPEAKER_SETTLE_MS = 50;
+
+let speakerPrimed = false;
 
 export function isMicRoute() {
   return route === 'mic';
@@ -52,38 +72,49 @@ async function stopActiveRecording() {
   }
 }
 
-export async function ensureVoiceSession(): Promise<void> {
+/** Mic capture mode — call before Recording.createAsync. */
+export async function ensureMicCaptureMode(): Promise<void> {
+  await stopActiveRecording();
   await Audio.setIsEnabledAsync(true);
-  await Audio.setAudioModeAsync(VOICE_SESSION_MODE);
+  await Audio.setAudioModeAsync(MIC_CAPTURE_MODE);
+  await new Promise((r) => setTimeout(r, MIC_SETTLE_MS));
   sessionReady = true;
+  speakerPrimed = false;
 }
 
-/**
- * Logical route only — native session stays play+record capable.
- * assistant = pause mic chunks while Bistro speaks.
- */
+/** Loudspeaker for Bistro replies — only while not capturing. */
+export async function applySpeakerForPlayback(): Promise<void> {
+  if (speakerPrimed) return;
+  await stopActiveRecording();
+  await Audio.setIsEnabledAsync(true);
+  await Audio.setAudioModeAsync(SPEAKER_PLAYBACK_MODE);
+  await new Promise((r) => setTimeout(r, SPEAKER_SETTLE_MS));
+  speakerPrimed = true;
+}
+
+/** @deprecated alias */
+export async function ensureVoiceSession(): Promise<void> {
+  await ensureMicCaptureMode();
+}
+
 export function setAudioRoute(next: AudioRoute): Promise<void> {
   return runAudioExclusive(async () => {
     if (next === 'assistant') {
       route = 'assistant';
-      await stopActiveRecording();
-      if (__DEV__) console.log('[voice] capture paused');
+      await applySpeakerForPlayback();
+      if (__DEV__) console.log('[voice] route → speaker');
       return;
     }
-    if (!sessionReady) await ensureVoiceSession();
-    await new Promise((r) => setTimeout(r, MIC_SETTLE_MS));
+    await ensureMicCaptureMode();
     route = 'mic';
-    if (__DEV__) console.log('[voice] capture active');
+    if (__DEV__) console.log('[voice] route → mic');
   });
-}
-
-export async function applySpeakerForPlayback() {
-  if (!sessionReady) await ensureVoiceSession();
 }
 
 export function resetVoiceAudioSession() {
   route = 'mic';
   sessionReady = false;
+  speakerPrimed = false;
   activeRecording = null;
   chain = Promise.resolve();
 }

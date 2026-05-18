@@ -3,6 +3,10 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { applySpeakerForPlayback, runAudioExclusive } from './voiceAudioSession';
 
 const SAMPLE_RATE = 24000;
+const BYTES_PER_MS = (SAMPLE_RATE * 2) / 1000;
+/** Start speaking after ~280ms of PCM (don't wait for the full reply). */
+const MIN_START_MS = 280;
+const MIN_START_BYTES = Math.floor(BYTES_PER_MS * MIN_START_MS);
 
 function base64ToBytes(b64: string): Uint8Array {
   const binary = atob(b64);
@@ -45,41 +49,58 @@ function isSessionNotActiveError(err: unknown): boolean {
   return msg.includes('session not activated') || msg.includes('561017449');
 }
 
-async function createAndPlaySound(uri: string): Promise<Audio.Sound> {
+async function createAndPlaySound(uri: string, primeSpeaker: boolean): Promise<Audio.Sound> {
   let last: unknown;
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
-      await applySpeakerForPlayback();
+      if (primeSpeaker) await applySpeakerForPlayback();
       const { sound } = await Audio.Sound.createAsync(
         { uri },
-        { shouldPlay: true, volume: 1.0, progressUpdateIntervalMillis: 100 }
+        { shouldPlay: true, volume: 1.0, progressUpdateIntervalMillis: 50 }
       );
       return sound;
     } catch (err) {
       last = err;
       if (!isSessionNotActiveError(err) || attempt === 3) throw err;
-      if (__DEV__) console.warn('[voice] retry play, attempt', attempt + 1);
-      await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
+      await new Promise((r) => setTimeout(r, 100 * (attempt + 1)));
     }
   }
   throw last;
 }
 
-function waitForAudiblePlayback(sound: Audio.Sound, pcmBytes: number): Promise<boolean> {
-  const expectedMs = Math.ceil((pcmBytes / (SAMPLE_RATE * 2)) * 1000);
-  const maxMs = expectedMs + 2000;
+function captionSlice(full: string, ratio: number): string {
+  if (!full) return '';
+  if (ratio >= 1) return full;
+  return full.slice(0, Math.max(0, Math.ceil(full.length * ratio)));
+}
 
+export type PlayBufferedOptions = {
+  getCaption?: () => string;
+  onCaptionUpdate?: (visible: string) => void;
+};
+
+function waitForPlaybackEnd(
+  sound: Audio.Sound,
+  durationMs: number,
+  caption: PlayBufferedOptions | undefined,
+  playedMsBefore: number,
+  estimatedTotalMs: number
+): Promise<boolean> {
+  const maxMs = durationMs + 1500;
   return new Promise((resolve) => {
     let heard = false;
-    const timeout = setTimeout(() => {
-      if (__DEV__) console.warn('[voice] playback timed out, heard=', heard);
-      resolve(heard);
-    }, maxMs);
+    const timeout = setTimeout(() => resolve(heard), maxMs);
 
     sound.setOnPlaybackStatusUpdate((st: AVPlaybackStatus) => {
       if (!st.isLoaded) return;
       const pos = st.positionMillis ?? 0;
-      if (st.isPlaying && pos > 80) heard = true;
+      const full = caption?.getCaption?.() ?? '';
+      const totalEst = Math.max(estimatedTotalMs, playedMsBefore + durationMs);
+      if (full && caption?.onCaptionUpdate) {
+        const ratio = totalEst > 0 ? Math.min(1, (playedMsBefore + pos) / totalEst) : 0;
+        caption.onCaptionUpdate(captionSlice(full, ratio));
+      }
+      if (st.isPlaying && pos > 50) heard = true;
       if (heard && st.didJustFinish) {
         clearTimeout(timeout);
         resolve(true);
@@ -91,20 +112,31 @@ function waitForAudiblePlayback(sound: Audio.Sound, pcmBytes: number): Promise<b
 let activeSound: Audio.Sound | null = null;
 let generation = 0;
 
-/** Buffer PCM from the server; play once when the reply is done. */
+/** Stream PCM — start playing early, then queue the rest. */
 export class RealtimePlayback {
   private parts: Uint8Array[] = [];
   private bytes = 0;
   private halted = false;
+  private streamStarted = false;
+  private playChain: Promise<boolean> = Promise.resolve(true);
+  private captionOpts: PlayBufferedOptions | undefined;
+  private playedMs = 0;
+  private primeSpeakerNext = true;
 
   arm() {
     this.halted = false;
+    this.streamStarted = false;
+    this.playChain = Promise.resolve(true);
+    this.playedMs = 0;
+    this.primeSpeakerNext = true;
   }
 
   reset() {
     this.halted = true;
     this.parts = [];
     this.bytes = 0;
+    this.streamStarted = false;
+    this.captionOpts = undefined;
   }
 
   interrupt() {
@@ -114,20 +146,43 @@ export class RealtimePlayback {
     void stopPlayback();
   }
 
+  setCaptionOptions(opts?: PlayBufferedOptions) {
+    this.captionOpts = opts;
+  }
+
   pushDelta(delta: string) {
     if (!delta || this.halted) return;
     const chunk = base64ToBytes(delta);
     this.parts.push(chunk);
     this.bytes += chunk.length;
+
+    if (!this.streamStarted && this.bytes >= MIN_START_BYTES) {
+      this.streamStarted = true;
+      if (__DEV__) console.log('[voice] early playback', this.bytes, 'bytes');
+      this.playChain = this.playChain.then(() => this.playNextSegment());
+    }
   }
 
   hasAudio() {
-    return this.bytes > 0;
+    return this.bytes > 0 || this.streamStarted;
   }
 
-  playBuffered(): Promise<boolean> {
-    if (this.halted || !this.bytes) return Promise.resolve(false);
+  /** Play any audio still in the buffer after the server marks the turn done. */
+  finish(): Promise<boolean> {
+    if (this.halted) return Promise.resolve(false);
+    return this.playChain.then(async () => {
+      let heard = false;
+      while (this.bytes > 0 && !this.halted) {
+        heard = (await this.playNextSegment()) || heard;
+      }
+      const full = this.captionOpts?.getCaption?.() ?? '';
+      if (full) this.captionOpts?.onCaptionUpdate?.(full);
+      return heard;
+    });
+  }
 
+  private drainPcm(): Uint8Array | null {
+    if (!this.bytes) return null;
     const pcm = new Uint8Array(this.bytes);
     let offset = 0;
     for (const part of this.parts) {
@@ -136,46 +191,58 @@ export class RealtimePlayback {
     }
     this.parts = [];
     this.bytes = 0;
+    return pcm;
+  }
+
+  private async playNextSegment(): Promise<boolean> {
+    if (this.halted) return false;
+
+    const pendingMs = this.bytes / BYTES_PER_MS;
+    const pcm = this.drainPcm();
+    if (!pcm || pcm.length < 400) return false;
 
     const gen = generation;
-    return runAudioExclusive(async () => {
-      if (gen !== generation) return false;
+    const durationMs = Math.ceil(pcm.length / BYTES_PER_MS);
+    const estimatedTotalMs = this.playedMs + pendingMs;
+    const prime = this.primeSpeakerNext;
+    this.primeSpeakerNext = false;
 
-      if (gen !== generation) return false;
+    return runAudioExclusive(async () => {
+      if (gen !== generation || this.halted) return false;
 
       const uri = `${FileSystem.cacheDirectory}bistro-reply-${Date.now()}.wav`;
       await FileSystem.writeAsStringAsync(uri, pcmToWavBase64(pcm), {
         encoding: FileSystem.EncodingType.Base64,
       });
 
-      const info = await FileSystem.getInfoAsync(uri);
-      if (!info.exists || (info.size ?? 0) < 100) {
-        if (__DEV__) console.warn('[voice] wav file missing or tiny', info);
-        return false;
-      }
-
       if (gen !== generation) {
         await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
         return false;
       }
 
-      if (__DEV__) console.log('[voice] playing reply', pcm.length, 'pcm bytes');
-
-      const sound = await createAndPlaySound(uri);
+      const sound = await createAndPlaySound(uri, prime);
       activeSound = sound;
 
-      const heard = await waitForAudiblePlayback(sound, pcm.length);
+      if (this.playedMs === 0) this.captionOpts?.onCaptionUpdate?.('');
+
+      const heard = await waitForPlaybackEnd(
+        sound,
+        durationMs,
+        this.captionOpts,
+        this.playedMs,
+        estimatedTotalMs
+      );
+
+      this.playedMs += durationMs;
 
       if (activeSound === sound) {
         await sound.unloadAsync().catch(() => {});
         activeSound = null;
       }
       await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
-
-      if (__DEV__ && !heard) console.warn('[voice] no audible output detected');
       return heard;
     }).catch((err) => {
-      if (__DEV__) console.warn('[voice] playback failed', err);
+      if (__DEV__) console.warn('[voice] segment play failed', err);
       return false;
     });
   }
