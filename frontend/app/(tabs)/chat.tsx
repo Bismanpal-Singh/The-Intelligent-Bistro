@@ -9,7 +9,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { Fonts, Spacing } from '../../constants/theme';
 import { TAB_BAR_INSET } from '../../constants/layout';
 import { useCartStore } from '../../store/cartStore';
-import { MENU_ITEMS } from '../../data/menu';
+import { applyCartActions, type CartAction } from '../../lib/applyCartActions';
 import BistroAvatar, { BistroAvatarLarge } from '../../components/BistroAvatar';
 import VoiceModePanel from '../../components/VoiceModePanel';
 import { getApiBase } from '../../lib/apiBase';
@@ -259,46 +259,7 @@ export default function ChatScreen() {
     return () => clearTimeout(timer);
   }, [messages.length, loading]);
 
-  useEffect(() => {
-    if (__DEV__) console.log('[Bistro] API_BASE:', API_BASE);
-  }, []);
-
   useEffect(() => () => stopSpeaking(), []);
-
-  const applyActions = (actions: any[]) => {
-    for (const action of actions) {
-      const store = useCartStore.getState();
-      if (action.action === 'add') {
-        const item = MENU_ITEMS.find((m) => m.id === action.itemId);
-        if (item) store.addItem(item, action.quantity ?? 1, action.customizations);
-      } else if (action.action === 'remove') {
-        if (action.cartLineId) store.removeItem(action.cartLineId);
-        else if (action.itemId) store.removeAllForItem(action.itemId);
-      } else if (action.action === 'update') {
-        if (action.cartLineId) {
-          store.updateQuantity(action.cartLineId, action.quantity);
-        } else if (action.itemId) {
-          const lines = store.items.filter((i) => i.itemId === action.itemId);
-          if (lines.length === 1) store.updateQuantity(lines[0].cartLineId, action.quantity);
-        }
-      } else if (action.action === 'update_customizations') {
-        const cart = useCartStore.getState().items;
-        const lineId =
-          action.cartLineId ??
-          (action.itemId
-            ? cart.filter((i) => i.itemId === action.itemId).length === 1
-              ? cart.find((i) => i.itemId === action.itemId)!.cartLineId
-              : null
-            : null);
-        if (!lineId) continue;
-        const cartStore = useCartStore.getState();
-        if (action.patch) cartStore.patchCustomizations(lineId, action.patch);
-        else if (action.customizations) cartStore.updateCustomizations(lineId, action.customizations);
-      } else if (action.action === 'clear') {
-        store.clearCart();
-      }
-    }
-  };
 
   const sendMessage = useCallback(async (textOverride?: string) => {
     const text = (textOverride ?? input).trim();
@@ -345,7 +306,7 @@ export default function ChatScreen() {
             const data = JSON.parse(line.slice(6));
 
             if (data.type === 'actions') {
-              applyActions(data.actions);
+              applyCartActions(data.actions as CartAction[]);
               setLoading(false);
               setMessages((prev) => [...prev, { id: assistantId, role: 'assistant', text: '', timestamp: new Date() }]);
               startTyping(assistantId);

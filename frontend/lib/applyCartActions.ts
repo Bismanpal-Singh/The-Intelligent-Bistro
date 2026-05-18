@@ -65,7 +65,6 @@ function normalizePatch(patch?: Record<string, unknown>) {
   return p;
 }
 
-/** Full cart snapshot for the model (matches backend cartContextString). */
 export function cartContextForVoice(): string {
   const items = useCartStore.getState().items;
   if (!items.length) return 'The cart is currently empty.';
@@ -90,15 +89,10 @@ export function cartContextForVoice(): string {
   );
 }
 
-/** Tool result text — model must read this before speaking. */
 export function cartToolResultForVoice(): string {
   const cart = cartContextForVoice();
   if (cart.startsWith('The cart is currently empty')) {
     return `TOOL_RESULT: No change — cart is still empty.\n${cart}`;
   }
   return `TOOL_RESULT: Success.\n${cart}`;
-}
-
-export function cartSummaryForVoice(): string {
-  return cartContextForVoice();
 }

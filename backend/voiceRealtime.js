@@ -14,6 +14,11 @@ const REALTIME_VOICE = process.env.OPENAI_REALTIME_VOICE ?? 'alloy';
 const TRANSCRIPTION_MODEL =
   process.env.OPENAI_TRANSCRIPTION_MODEL ?? 'gpt-4o-mini-transcribe';
 const SESSION_UPDATE_TIMEOUT_MS = 4000;
+const VOICE_DEBUG = process.env.VOICE_DEBUG === '1';
+
+function voiceLog(...args) {
+  if (VOICE_DEBUG) console.log(...args);
+}
 
 function openAIRealtimeUrl() {
   return `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(REALTIME_MODEL)}`;
@@ -89,7 +94,7 @@ function forwardAssistantTranscript(clientWs, event) {
 }
 
 function handleClientConnection(clientWs) {
-  console.log('[voice] Client connected');
+  voiceLog('[voice] client connected');
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     sendJson(clientWs, {
@@ -145,13 +150,13 @@ function handleClientConnection(clientWs) {
   const connectOpenAI = () => {
     if (openaiWs && openaiWs.readyState !== WebSocket.CLOSED) return;
 
-    console.log('[voice] Connecting to OpenAI Realtime…');
+    voiceLog('[voice] connecting to OpenAI Realtime');
     openaiWs = new WebSocket(openAIRealtimeUrl(), {
       headers: { Authorization: `Bearer ${apiKey}` },
     });
 
     openaiWs.on('open', () => {
-      console.log('[voice] OpenAI socket open');
+      voiceLog('[voice] OpenAI socket open');
       pushSessionUpdate();
     });
 
@@ -163,8 +168,8 @@ function handleClientConnection(clientWs) {
         return;
       }
 
-      if (process.env.VOICE_DEBUG === '1' && event.type?.includes('transcript')) {
-        console.log('[voice] OpenAI transcript event:', event.type);
+      if (VOICE_DEBUG && event.type?.includes('transcript')) {
+        voiceLog('[voice] transcript event:', event.type);
       }
 
       switch (event.type) {
@@ -178,7 +183,7 @@ function handleClientConnection(clientWs) {
             awaitingSessionUpdate = false;
             if (!sessionReady) {
               sessionReady = true;
-              console.log('[voice] Session ready');
+              voiceLog('[voice] session ready');
               sendJson(clientWs, { type: 'ready' });
             }
           }
@@ -244,7 +249,7 @@ function handleClientConnection(clientWs) {
             args = {};
           }
           const actions = toolCallToActions(name, args);
-          console.log('[voice] tool call', name, JSON.stringify(args));
+          voiceLog('[voice] tool call', name, JSON.stringify(args));
 
           if (responseHasAudio) {
             sendJson(clientWs, { type: 'discard_playback' });
@@ -330,7 +335,7 @@ function handleClientConnection(clientWs) {
     });
 
     openaiWs.on('close', (code, reason) => {
-      console.log('[voice] OpenAI WS closed', code, reason?.toString?.() ?? '');
+      voiceLog('[voice] OpenAI WS closed', code, reason?.toString?.() ?? '');
       openaiWs = null;
       sessionReady = false;
     });
@@ -430,7 +435,7 @@ function handleClientConnection(clientWs) {
   });
 
   clientWs.on('close', () => {
-    console.log('[voice] Client disconnected');
+    voiceLog('[voice] client disconnected');
     try {
       openaiWs?.close();
     } catch {

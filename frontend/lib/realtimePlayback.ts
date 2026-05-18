@@ -4,7 +4,6 @@ import { applySpeakerForPlayback, runAudioExclusive } from './voiceAudioSession'
 
 const SAMPLE_RATE = 24000;
 const BYTES_PER_MS = (SAMPLE_RATE * 2) / 1000;
-/** Start speaking after ~280ms of PCM (don't wait for the full reply). */
 const MIN_START_MS = 280;
 const MIN_START_BYTES = Math.floor(BYTES_PER_MS * MIN_START_MS);
 
@@ -74,9 +73,7 @@ function captionSlice(full: string, ratio: number): string {
   return full.slice(0, Math.max(0, Math.ceil(full.length * ratio)));
 }
 
-/** Chars/sec for caption pacing (higher → shorter estimate → faster on-screen text). */
 const CAPTION_CHARS_PER_SEC = 18;
-/** Reveal text slightly ahead of raw playback position so it keeps up with speech. */
 const CAPTION_PACE = 1.45;
 
 function estimateSpeechDurationMs(streamedBytes: number, playedMs: number, caption: string): number {
@@ -181,7 +178,6 @@ export class RealtimePlayback {
 
     if (!this.streamStarted && this.bytes >= MIN_START_BYTES) {
       this.streamStarted = true;
-      if (__DEV__) console.log('[voice] early playback', this.bytes, 'bytes');
       this.playChain = this.playChain.then(() => this.playNextSegment());
     }
   }
@@ -190,7 +186,6 @@ export class RealtimePlayback {
     return this.bytes > 0 || this.streamStarted;
   }
 
-  /** Play any audio still in the buffer after the server marks the turn done. */
   finish(): Promise<boolean> {
     if (this.halted) return Promise.resolve(false);
     return this.playChain.then(async () => {
@@ -262,7 +257,6 @@ export class RealtimePlayback {
       await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
       return heard;
     }).catch((err) => {
-      if (__DEV__) console.warn('[voice] segment play failed', err);
       return false;
     });
   }
@@ -281,5 +275,3 @@ export async function stopPlayback() {
     activeSound = null;
   }).catch(() => {});
 }
-
-export { resetVoiceAudioSession } from './voiceAudioSession';

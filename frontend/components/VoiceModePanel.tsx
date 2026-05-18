@@ -85,30 +85,20 @@ function PulseRing({ active, color, size }: { active: boolean; color: string; si
 }
 
 type Props = {
-  onAssistantLine?: (text: string) => void;
   bottomInset?: number;
 };
 
-export default function VoiceModePanel({
-  onAssistantLine,
-  bottomInset = TAB_BAR_INSET,
-}: Props) {
+export default function VoiceModePanel({ bottomInset = TAB_BAR_INSET }: Props) {
   const { colors, isDark } = useTheme();
   const router = useRouter();
   const cartCount = useCartStore((s) => s.totalItems());
-  const { status, error, lastReply, isActive, connect, disconnect } = useRealtimeVoice({
-    onTranscript: onAssistantLine,
-  });
+  const { status, error, lastReply, isActive, connect, disconnect } = useRealtimeVoice();
 
   const pulseActive =
     isActive && (status === 'ready' || status === 'listening' || status === 'speaking');
   const starting = status === 'connecting' || status === 'linked';
   const showCaption = Boolean(lastReply) || status === 'speaking';
   const canStart = !isActive && !starting && status !== 'error';
-
-  useEffect(() => () => {
-    void disconnect();
-  }, [disconnect]);
 
   const handleCallPress = () => {
     if (isActive || starting) {

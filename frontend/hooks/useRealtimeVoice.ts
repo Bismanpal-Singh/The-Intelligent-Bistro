@@ -17,7 +17,7 @@ import {
   setAudioRoute,
 } from '../lib/voiceAudioSession';
 import { captureVoiceChunk } from '../lib/voiceRecording';
-import { useCartStore, CartItem } from '../store/cartStore';
+import { useCartStore } from '../store/cartStore';
 
 const CHUNK_MS = 400;
 const MIC_ERROR_BACKOFF_MS = 600;
@@ -34,41 +34,29 @@ export type VoiceStatus =
   | 'speaking'
   | 'error';
 
-type Options = {
-  onTranscript?: (text: string) => void;
-};
-
-export function useRealtimeVoice({ onTranscript }: Options = {}) {
+export function useRealtimeVoice() {
   const [status, setStatus] = useState<VoiceStatus>('idle');
   const [error, setError] = useState<string | null>(null);
-  const [liveTranscript, setLiveTranscript] = useState('');
   const [lastReply, setLastReply] = useState('');
 
   const wsRef = useRef<WebSocket | null>(null);
   const recordingLoopRef = useRef(false);
   const playbackRef = useRef(new RealtimePlayback());
-  const userTranscriptBuf = useRef('');
   const assistantTranscriptBuf = useRef('');
   const statusRef = useRef(status);
   const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const listeningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const assistantTurnEndRef = useRef(false);
   const dropAssistantAudioRef = useRef(false);
-  /** Hide Bistro caption until audio plays; then reveal in sync with speaker. */
-  const holdCaptionForAudioRef = useRef(false);
   const assistantSpeakerRouteRef = useRef(false);
   const captionCharsShownRef = useRef(0);
-  const onTranscriptRef = useRef(onTranscript);
-
   statusRef.current = status;
-  onTranscriptRef.current = onTranscript;
 
   const resetCaption = useCallback(() => {
     captionCharsShownRef.current = 0;
     setLastReply('');
   }, []);
 
-  /** Caption only grows during a turn — prevents flash then restart on multi-chunk audio. */
   const applyCaption = useCallback((visible: string) => {
     if (!visible) {
       resetCaption();
@@ -93,7 +81,6 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
     }
   }, []);
 
-  /** Re-open mic after a stuck or empty turn (status alone is not enough). */
   const returnToMicReady = useCallback(async () => {
     clearThinkingTimer();
     clearListeningTimer();
@@ -125,10 +112,6 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
     }
   }, []);
 
-  const syncCart = useCallback(() => {
-    sendJson({ type: 'cart_sync', cartItems: useCartStore.getState().items });
-  }, [sendJson]);
-
   const sendAudioFile = useCallback(async (uri: string) => {
     if (wsRef.current?.readyState !== WebSocket.OPEN || !isMicRoute()) return;
     const data = await FileSystem.readAsStringAsync(uri, {
@@ -136,7 +119,6 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
     });
     if (!data?.length) return;
     sendJson({ type: 'audio_chunk', data });
-    if (__DEV__) console.log('[voice] sent audio chunk', data.length, 'b64 chars');
     await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
   }, [sendJson]);
 
@@ -158,11 +140,8 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
         if (uri && isMicRoute() && recordingLoopRef.current) {
           await sendAudioFile(uri);
         }
-      } catch (err) {
+      } catch {
         micErrorStreak += 1;
-        if (__DEV__ && micErrorStreak <= 3) {
-          console.warn('[voice] mic error', err);
-        }
         await new Promise((r) =>
           setTimeout(r, MIC_ERROR_BACKOFF_MS * Math.min(micErrorStreak, 4))
         );
@@ -189,7 +168,6 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
       } else if (assistantTranscriptBuf.current) {
         applyCaption(assistantTranscriptBuf.current);
       }
-      holdCaptionForAudioRef.current = false;
       assistantSpeakerRouteRef.current = false;
       clearListeningTimer();
       await setAudioRoute('mic');
@@ -221,10 +199,8 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
     }
 
     setStatus('idle');
-    setLiveTranscript('');
-    userTranscriptBuf.current = '';
+    resetCaption();
     assistantTranscriptBuf.current = '';
-    holdCaptionForAudioRef.current = false;
     assistantSpeakerRouteRef.current = false;
   }, [clearThinkingTimer, clearListeningTimer, resetCaption]);
 
@@ -237,7 +213,6 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
     setError(null);
     setStatus('connecting');
     resetCaption();
-    setLiveTranscript('');
 
     const permission = await Audio.requestPermissionsAsync();
     if (!permission.granted) {
@@ -290,10 +265,7 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
           break;
 
         case 'speech_started':
-          if (assistantTurnEndRef.current || statusRef.current === 'speaking') {
-            if (__DEV__) console.log('[voice] ignore speech_started during Bistro playback');
-            break;
-          }
+          if (assistantTurnEndRef.current || statusRef.current === 'speaking') break;
           clearThinkingTimer();
           assistantTurnEndRef.current = false;
           playbackRef.current.interrupt();
@@ -301,8 +273,6 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
           assistantSpeakerRouteRef.current = false;
           void setAudioRoute('mic').then(() => {
             setStatus('listening');
-            userTranscriptBuf.current = '';
-            setLiveTranscript('');
             armListeningTimeout();
           });
           break;
@@ -310,7 +280,6 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
         case 'speech_stopped':
           clearListeningTimer();
           assistantTranscriptBuf.current = '';
-          holdCaptionForAudioRef.current = true;
           resetCaption();
           setStatus('thinking');
           armThinkingTimeout();
@@ -318,7 +287,6 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
 
         case 'discard_playback':
           dropAssistantAudioRef.current = true;
-          holdCaptionForAudioRef.current = false;
           assistantSpeakerRouteRef.current = false;
           playbackRef.current.interrupt();
           playbackRef.current.arm();
@@ -348,18 +316,6 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
           void onAssistantTurnEnd();
           break;
 
-        case 'user_transcript_delta':
-          userTranscriptBuf.current += msg.delta as string;
-          setLiveTranscript(userTranscriptBuf.current);
-          break;
-
-        case 'user_transcript_done': {
-          const t = (msg.transcript as string) ?? userTranscriptBuf.current;
-          userTranscriptBuf.current = t;
-          setLiveTranscript(t);
-          break;
-        }
-
         case 'assistant_transcript_delta':
           dropAssistantAudioRef.current = false;
           assistantTranscriptBuf.current += msg.delta as string;
@@ -369,14 +325,12 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
           dropAssistantAudioRef.current = false;
           const t = (msg.transcript as string) ?? assistantTranscriptBuf.current;
           assistantTranscriptBuf.current = t;
-          onTranscriptRef.current?.(t);
           break;
         }
 
         case 'function_call': {
           clearThinkingTimer();
           dropAssistantAudioRef.current = true;
-          holdCaptionForAudioRef.current = true;
           assistantSpeakerRouteRef.current = false;
           playbackRef.current.interrupt();
           playbackRef.current.arm();
@@ -385,18 +339,14 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
           setStatus('thinking');
           try {
             const actions = (msg.actions as CartAction[]) ?? [];
-            const name = msg.name as string;
-            if (__DEV__) console.log('[voice] tool', name, msg.arguments);
             if (actions.length) applyCartActions(actions);
-            else if (__DEV__) console.warn('[voice] tool produced no cart actions', name);
             sendJson({
               type: 'function_result',
               callId: msg.callId,
               output: cartToolResultForVoice(),
               cartItems: useCartStore.getState().items,
             });
-          } catch (err) {
-            if (__DEV__) console.warn('[voice] function_call error', err);
+          } catch {
             sendJson({
               type: 'function_result',
               callId: msg.callId,
@@ -422,13 +372,12 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
 
         case 'error': {
           const errMsg = (msg.message as string) ?? '';
+          const lower = errMsg.toLowerCase();
           const benign =
-            errMsg.toLowerCase().includes('cancellation failed') ||
-            errMsg.toLowerCase().includes('no active response');
-          if (benign) {
-            if (__DEV__) console.warn('[voice] ignored:', errMsg);
-            break;
-          }
+            lower.includes('cancellation failed') ||
+            lower.includes('no active response') ||
+            lower.includes('response_cancel');
+          if (benign) break;
           clearTimeout(connectTimeout);
           clearThinkingTimer();
           setError(errMsg || 'Voice session error');
@@ -466,7 +415,6 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
     resetCaption,
     returnToMicReady,
     sendJson,
-    syncCart,
   ]);
 
   useEffect(() => {
@@ -478,7 +426,6 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
   return {
     status,
     error,
-    liveTranscript,
     lastReply,
     isActive: status !== 'idle' && status !== 'error' && status !== 'connecting',
     connect,
