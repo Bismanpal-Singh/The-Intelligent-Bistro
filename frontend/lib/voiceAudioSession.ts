@@ -6,11 +6,8 @@ type StoppableRecording = {
   stopAndUnloadAsync: () => Promise<unknown>;
 };
 
-let route: AudioRoute = 'mic';
-let chain: Promise<void> = Promise.resolve();
-let activeRecording: StoppableRecording | null = null;
-
-const MIC_MODE = {
+/** Play + record for the whole voice call — never flip allowsRecordingIOS off (iOS breaks prepare). */
+const VOICE_SESSION_MODE = {
   allowsRecordingIOS: true,
   playsInSilentModeIOS: true,
   staysActiveInBackground: true,
@@ -20,15 +17,12 @@ const MIC_MODE = {
   playThroughEarpieceAndroid: false,
 } as const;
 
-const SPEAKER_MODE = {
-  allowsRecordingIOS: false,
-  playsInSilentModeIOS: true,
-  staysActiveInBackground: true,
-  interruptionModeIOS: InterruptionModeIOS.DuckOthers,
-  interruptionModeAndroid: InterruptionModeAndroid.DuckOthers,
-  shouldDuckAndroid: true,
-  playThroughEarpieceAndroid: false,
-} as const;
+let route: AudioRoute = 'mic';
+let sessionReady = false;
+let chain: Promise<void> = Promise.resolve();
+let activeRecording: StoppableRecording | null = null;
+
+const MIC_SETTLE_MS = 200;
 
 export function isMicRoute() {
   return route === 'mic';
@@ -58,33 +52,38 @@ async function stopActiveRecording() {
   }
 }
 
+export async function ensureVoiceSession(): Promise<void> {
+  await Audio.setIsEnabledAsync(true);
+  await Audio.setAudioModeAsync(VOICE_SESSION_MODE);
+  sessionReady = true;
+}
+
 /**
- * mic = user turn (capture). assistant = Bistro reply (bottom speaker, no mic).
+ * Logical route only — native session stays play+record capable.
+ * assistant = pause mic chunks while Bistro speaks.
  */
 export function setAudioRoute(next: AudioRoute): Promise<void> {
-  route = next;
   return runAudioExclusive(async () => {
     if (next === 'assistant') {
+      route = 'assistant';
       await stopActiveRecording();
-      await new Promise((r) => setTimeout(r, 120));
-      await Audio.setAudioModeAsync(SPEAKER_MODE);
-      if (__DEV__) console.log('[voice] route → speaker');
+      if (__DEV__) console.log('[voice] capture paused');
       return;
     }
-    await Audio.setAudioModeAsync(MIC_MODE);
-    if (__DEV__) console.log('[voice] route → mic');
+    if (!sessionReady) await ensureVoiceSession();
+    await new Promise((r) => setTimeout(r, MIC_SETTLE_MS));
+    route = 'mic';
+    if (__DEV__) console.log('[voice] capture active');
   });
 }
 
-/** Call only from inside runAudioExclusive — sets speaker route without re-queueing. */
 export async function applySpeakerForPlayback() {
-  await Audio.setIsEnabledAsync(true);
-  await Audio.setAudioModeAsync(SPEAKER_MODE);
-  await new Promise((r) => setTimeout(r, 80));
+  if (!sessionReady) await ensureVoiceSession();
 }
 
 export function resetVoiceAudioSession() {
   route = 'mic';
+  sessionReady = false;
   activeRecording = null;
   chain = Promise.resolve();
 }

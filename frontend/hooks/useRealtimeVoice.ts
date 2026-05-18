@@ -9,16 +9,20 @@ import {
 } from '../lib/applyCartActions';
 import { RealtimePlayback, stopPlayback } from '../lib/realtimePlayback';
 import {
+  ensureVoiceSession,
   isMicRoute,
   registerActiveRecording,
   resetVoiceAudioSession,
   runAudioExclusive,
   setAudioRoute,
 } from '../lib/voiceAudioSession';
+import { captureVoiceChunk } from '../lib/voiceRecording';
 import { useCartStore, CartItem } from '../store/cartStore';
 
-const CHUNK_MS = 280;
+const CHUNK_MS = 400;
+const MIC_ERROR_BACKOFF_MS = 600;
 const THINKING_TIMEOUT_MS = 14_000;
+const LISTENING_TIMEOUT_MS = 45_000;
 
 export type VoiceStatus =
   | 'idle'
@@ -47,6 +51,7 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
   const assistantTranscriptBuf = useRef('');
   const statusRef = useRef(status);
   const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const listeningTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const assistantTurnEndRef = useRef(false);
   const dropAssistantAudioRef = useRef(false);
   const onTranscriptRef = useRef(onTranscript);
@@ -61,12 +66,38 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
     }
   }, []);
 
+  const clearListeningTimer = useCallback(() => {
+    if (listeningTimerRef.current) {
+      clearTimeout(listeningTimerRef.current);
+      listeningTimerRef.current = null;
+    }
+  }, []);
+
+  /** Re-open mic after a stuck or empty turn (status alone is not enough). */
+  const returnToMicReady = useCallback(async () => {
+    clearThinkingTimer();
+    clearListeningTimer();
+    dropAssistantAudioRef.current = false;
+    await setAudioRoute('mic');
+    const s = statusRef.current;
+    if (s !== 'idle' && s !== 'connecting' && s !== 'linked' && s !== 'error') {
+      setStatus('ready');
+    }
+  }, [clearThinkingTimer, clearListeningTimer]);
+
   const armThinkingTimeout = useCallback(() => {
     clearThinkingTimer();
     thinkingTimerRef.current = setTimeout(() => {
-      if (statusRef.current === 'thinking') setStatus('ready');
+      if (statusRef.current === 'thinking') void returnToMicReady();
     }, THINKING_TIMEOUT_MS);
-  }, [clearThinkingTimer]);
+  }, [clearThinkingTimer, returnToMicReady]);
+
+  const armListeningTimeout = useCallback(() => {
+    clearListeningTimer();
+    listeningTimerRef.current = setTimeout(() => {
+      if (statusRef.current === 'listening') void returnToMicReady();
+    }, LISTENING_TIMEOUT_MS);
+  }, [clearListeningTimer, returnToMicReady]);
 
   const sendJson = useCallback((payload: object) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -83,12 +114,15 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
     const data = await FileSystem.readAsStringAsync(uri, {
       encoding: FileSystem.EncodingType.Base64,
     });
+    if (!data?.length) return;
     sendJson({ type: 'audio_chunk', data });
+    if (__DEV__) console.log('[voice] sent audio chunk', data.length, 'b64 chars');
     await FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
   }, [sendJson]);
 
   const recordLoop = useCallback(async () => {
     recordingLoopRef.current = true;
+    let micErrorStreak = 0;
     while (recordingLoopRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
       if (!isMicRoute()) {
         await new Promise((r) => setTimeout(r, 100));
@@ -96,35 +130,22 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
       }
 
       try {
-        await runAudioExclusive(async () => {
-          if (!isMicRoute() || !recordingLoopRef.current) return;
-
-          const recording = new Audio.Recording();
-          registerActiveRecording(recording);
-          try {
-            await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.LOW_QUALITY);
-            if (!isMicRoute()) return;
-
-            await recording.startAsync();
-            const t0 = Date.now();
-            while (Date.now() - t0 < CHUNK_MS) {
-              if (!isMicRoute() || !recordingLoopRef.current) {
-                await recording.stopAndUnloadAsync().catch(() => {});
-                return;
-              }
-              await new Promise((r) => setTimeout(r, 50));
-            }
-
-            await recording.stopAndUnloadAsync();
-            const uri = recording.getURI();
-            if (uri && isMicRoute()) await sendAudioFile(uri);
-          } finally {
-            registerActiveRecording(null);
-          }
+        const uri = await runAudioExclusive(async () => {
+          if (!isMicRoute() || !recordingLoopRef.current) return null;
+          return captureVoiceChunk(CHUNK_MS, registerActiveRecording);
         });
+        micErrorStreak = 0;
+        if (uri && isMicRoute() && recordingLoopRef.current) {
+          await sendAudioFile(uri);
+        }
       } catch (err) {
-        if (__DEV__) console.warn('[voice] mic error', err);
-        await new Promise((r) => setTimeout(r, 250));
+        micErrorStreak += 1;
+        if (__DEV__ && micErrorStreak <= 3) {
+          console.warn('[voice] mic error', err);
+        }
+        await new Promise((r) =>
+          setTimeout(r, MIC_ERROR_BACKOFF_MS * Math.min(micErrorStreak, 4))
+        );
       }
     }
   }, [sendAudioFile]);
@@ -138,16 +159,20 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
         await playbackRef.current.playBuffered();
         await new Promise((r) => setTimeout(r, 150));
       }
+      clearListeningTimer();
       await setAudioRoute('mic');
-      if (statusRef.current !== 'listening') setStatus('ready');
+      if (statusRef.current !== 'idle' && statusRef.current !== 'error') {
+        setStatus('ready');
+      }
     } finally {
       assistantTurnEndRef.current = false;
     }
-  }, []);
+  }, [clearListeningTimer]);
 
   const disconnect = useCallback(async () => {
     recordingLoopRef.current = false;
     clearThinkingTimer();
+    clearListeningTimer();
     playbackRef.current.reset();
     resetVoiceAudioSession();
     await stopPlayback().catch(() => {});
@@ -167,7 +192,7 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
     setLiveTranscript('');
     userTranscriptBuf.current = '';
     assistantTranscriptBuf.current = '';
-  }, [clearThinkingTimer]);
+  }, [clearThinkingTimer, clearListeningTimer]);
 
   const disconnectRef = useRef(disconnect);
   disconnectRef.current = disconnect;
@@ -188,6 +213,7 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
     }
 
     await Audio.setIsEnabledAsync(true);
+    await ensureVoiceSession();
 
     const ws = new WebSocket(getVoiceWsUrl());
     wsRef.current = ws;
@@ -241,14 +267,14 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
             setStatus('listening');
             userTranscriptBuf.current = '';
             setLiveTranscript('');
+            armListeningTimeout();
           });
           break;
 
         case 'speech_stopped':
-          void setAudioRoute('assistant').then(() => {
-            setStatus('thinking');
-            armThinkingTimeout();
-          });
+          clearListeningTimer();
+          setStatus('thinking');
+          armThinkingTimeout();
           break;
 
         case 'discard_playback':
@@ -261,7 +287,10 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
           clearThinkingTimer();
           if (dropAssistantAudioRef.current) break;
           const audio = (msg.delta as string) || (msg.audio as string);
-          if (audio) playbackRef.current.pushDelta(audio);
+          if (audio) {
+            void setAudioRoute('assistant');
+            playbackRef.current.pushDelta(audio);
+          }
           if (statusRef.current === 'thinking') setStatus('speaking');
           break;
         }
@@ -303,6 +332,7 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
           dropAssistantAudioRef.current = true;
           playbackRef.current.interrupt();
           playbackRef.current.arm();
+          void setAudioRoute('assistant');
           assistantTranscriptBuf.current = '';
           setLastReply('');
           setStatus('thinking');
@@ -334,7 +364,13 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
         case 'response_done':
           clearThinkingTimer();
           dropAssistantAudioRef.current = false;
-          if (statusRef.current === 'thinking') armThinkingTimeout();
+          if (
+            statusRef.current === 'thinking' &&
+            !playbackRef.current.hasAudio() &&
+            !assistantTurnEndRef.current
+          ) {
+            void returnToMicReady();
+          }
           break;
 
         case 'error': {
@@ -373,7 +409,16 @@ export function useRealtimeVoice({ onTranscript }: Options = {}) {
       recordingLoopRef.current = false;
       if (statusRef.current !== 'error') setStatus('idle');
     };
-  }, [armThinkingTimeout, clearThinkingTimer, onAssistantTurnEnd, recordLoop, sendJson, syncCart]);
+  }, [
+    armListeningTimeout,
+    armThinkingTimeout,
+    clearThinkingTimer,
+    onAssistantTurnEnd,
+    recordLoop,
+    returnToMicReady,
+    sendJson,
+    syncCart,
+  ]);
 
   useEffect(() => {
     return () => {

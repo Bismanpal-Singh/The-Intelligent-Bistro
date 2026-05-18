@@ -5,11 +5,14 @@ import {
   cartContextString,
   toOpenAITools,
   toolCallToActions,
+  transcriptionHintForPrompt,
 } from './agentShared.js';
 
 const REALTIME_MODEL =
   process.env.OPENAI_REALTIME_MODEL ?? 'gpt-4o-mini-realtime-preview-2024-12-17';
 const REALTIME_VOICE = process.env.OPENAI_REALTIME_VOICE ?? 'alloy';
+const TRANSCRIPTION_MODEL =
+  process.env.OPENAI_TRANSCRIPTION_MODEL ?? 'gpt-4o-mini-transcribe';
 const SESSION_UPDATE_TIMEOUT_MS = 4000;
 
 function openAIRealtimeUrl() {
@@ -38,7 +41,12 @@ function buildSessionUpdate(cartItems) {
             prefix_padding_ms: 300,
             silence_duration_ms: 600,
           },
-          transcription: { model: 'whisper-1', language: 'en' },
+          transcription: {
+            model: TRANSCRIPTION_MODEL,
+            language: 'en',
+            prompt: transcriptionHintForPrompt(),
+          },
+          noise_reduction: { type: 'near_field' },
         },
         output: {
           format: { type: 'audio/pcm', rate: 24000 },

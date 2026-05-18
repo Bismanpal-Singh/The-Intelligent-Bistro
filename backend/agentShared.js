@@ -2,6 +2,7 @@ import {
   customizationGuideForPrompt,
   formatCustomizationsHuman,
   lineUnitPrice,
+  ITEM_CUSTOMIZATIONS,
 } from './customizations.js';
 
 export const MENU = [
@@ -41,6 +42,22 @@ const menuText = MENU.map(
   (m) =>
     `- ${m.name} (${m.id}) — $${m.price.toFixed(2)} [${m.category}]${m.popular ? ' ★ popular' : ''}`
 ).join('\n');
+
+/** Vocabulary hint for Realtime input transcription (UI “You” captions). Keep short for API limits. */
+export function transcriptionHintForPrompt() {
+  const menuNames = MENU.map((m) => m.name).join(', ');
+  const labels = new Set();
+  for (const group of Object.values(ITEM_CUSTOMIZATIONS)) {
+    for (const key of ['addOns', 'removals', 'substitutions']) {
+      for (const opt of group[key] ?? []) {
+        if (opt.label) labels.add(opt.label);
+      }
+    }
+  }
+  const modifiers = [...labels].slice(0, 24).join(', ');
+  const hint = `Restaurant order. Menu: ${menuNames}. Modifiers: ${modifiers}.`;
+  return hint.length > 900 ? `${hint.slice(0, 897)}...` : hint;
+}
 
 export const VOICE_INSTRUCTIONS = `You are Bistro, an elegant voice dining assistant for The Intelligent Bistro — a premium restaurant. You are on a live voice call with a guest.
 

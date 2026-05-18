@@ -1,6 +1,6 @@
 import { Audio, AVPlaybackStatus } from 'expo-av';
 import * as FileSystem from 'expo-file-system/legacy';
-import { applySpeakerForPlayback, isMicRoute, runAudioExclusive } from './voiceAudioSession';
+import { applySpeakerForPlayback, runAudioExclusive } from './voiceAudioSession';
 
 const SAMPLE_RATE = 24000;
 
@@ -141,7 +141,7 @@ export class RealtimePlayback {
     return runAudioExclusive(async () => {
       if (gen !== generation) return false;
 
-      if (gen !== generation || isMicRoute()) return false;
+      if (gen !== generation) return false;
 
       const uri = `${FileSystem.cacheDirectory}bistro-reply-${Date.now()}.wav`;
       await FileSystem.writeAsStringAsync(uri, pcmToWavBase64(pcm), {
