@@ -74,6 +74,25 @@ function captionSlice(full: string, ratio: number): string {
   return full.slice(0, Math.max(0, Math.ceil(full.length * ratio)));
 }
 
+/** Chars/sec for caption pacing (higher → shorter estimate → faster on-screen text). */
+const CAPTION_CHARS_PER_SEC = 18;
+/** Reveal text slightly ahead of raw playback position so it keeps up with speech. */
+const CAPTION_PACE = 1.45;
+
+function estimateSpeechDurationMs(streamedBytes: number, playedMs: number, caption: string): number {
+  const audioMs = Math.max(streamedBytes / BYTES_PER_MS, playedMs + 400);
+  const textMs =
+    caption.length > 0
+      ? Math.max(900, (caption.length / CAPTION_CHARS_PER_SEC) * 1000)
+      : audioMs;
+  return Math.max(audioMs, textMs);
+}
+
+function captionProgress(playedMs: number, pos: number, totalEst: number): number {
+  if (totalEst <= 0) return 0;
+  return Math.min(1, ((playedMs + pos) / totalEst) * CAPTION_PACE);
+}
+
 export type PlayBufferedOptions = {
   getCaption?: () => string;
   onCaptionUpdate?: (visible: string) => void;
@@ -84,7 +103,7 @@ function waitForPlaybackEnd(
   durationMs: number,
   caption: PlayBufferedOptions | undefined,
   playedMsBefore: number,
-  estimatedTotalMs: number
+  streamedBytes: number
 ): Promise<boolean> {
   const maxMs = durationMs + 1500;
   return new Promise((resolve) => {
@@ -95,9 +114,9 @@ function waitForPlaybackEnd(
       if (!st.isLoaded) return;
       const pos = st.positionMillis ?? 0;
       const full = caption?.getCaption?.() ?? '';
-      const totalEst = Math.max(estimatedTotalMs, playedMsBefore + durationMs);
+      const totalEst = estimateSpeechDurationMs(streamedBytes, playedMsBefore, full);
       if (full && caption?.onCaptionUpdate) {
-        const ratio = totalEst > 0 ? Math.min(1, (playedMsBefore + pos) / totalEst) : 0;
+        const ratio = captionProgress(playedMsBefore, pos, totalEst);
         caption.onCaptionUpdate(captionSlice(full, ratio));
       }
       if (st.isPlaying && pos > 50) heard = true;
@@ -121,6 +140,7 @@ export class RealtimePlayback {
   private playChain: Promise<boolean> = Promise.resolve(true);
   private captionOpts: PlayBufferedOptions | undefined;
   private playedMs = 0;
+  private streamedBytes = 0;
   private primeSpeakerNext = true;
 
   arm() {
@@ -128,6 +148,7 @@ export class RealtimePlayback {
     this.streamStarted = false;
     this.playChain = Promise.resolve(true);
     this.playedMs = 0;
+    this.streamedBytes = 0;
     this.primeSpeakerNext = true;
   }
 
@@ -136,6 +157,7 @@ export class RealtimePlayback {
     this.parts = [];
     this.bytes = 0;
     this.streamStarted = false;
+    this.streamedBytes = 0;
     this.captionOpts = undefined;
   }
 
@@ -155,6 +177,7 @@ export class RealtimePlayback {
     const chunk = base64ToBytes(delta);
     this.parts.push(chunk);
     this.bytes += chunk.length;
+    this.streamedBytes += chunk.length;
 
     if (!this.streamStarted && this.bytes >= MIN_START_BYTES) {
       this.streamStarted = true;
@@ -175,8 +198,6 @@ export class RealtimePlayback {
       while (this.bytes > 0 && !this.halted) {
         heard = (await this.playNextSegment()) || heard;
       }
-      const full = this.captionOpts?.getCaption?.() ?? '';
-      if (full) this.captionOpts?.onCaptionUpdate?.(full);
       return heard;
     });
   }
@@ -197,13 +218,12 @@ export class RealtimePlayback {
   private async playNextSegment(): Promise<boolean> {
     if (this.halted) return false;
 
-    const pendingMs = this.bytes / BYTES_PER_MS;
     const pcm = this.drainPcm();
     if (!pcm || pcm.length < 400) return false;
 
     const gen = generation;
     const durationMs = Math.ceil(pcm.length / BYTES_PER_MS);
-    const estimatedTotalMs = this.playedMs + pendingMs;
+    const streamedBytes = this.streamedBytes;
     const prime = this.primeSpeakerNext;
     this.primeSpeakerNext = false;
 
@@ -230,7 +250,7 @@ export class RealtimePlayback {
         durationMs,
         this.captionOpts,
         this.playedMs,
-        estimatedTotalMs
+        streamedBytes
       );
 
       this.playedMs += durationMs;

@@ -7,16 +7,71 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../context/ThemeContext';
 import { Fonts, Spacing } from '../../constants/theme';
+import { TAB_BAR_INSET } from '../../constants/layout';
 import { useCartStore } from '../../store/cartStore';
 import { MENU_ITEMS } from '../../data/menu';
 import BistroAvatar, { BistroAvatarLarge } from '../../components/BistroAvatar';
+import VoiceModePanel from '../../components/VoiceModePanel';
 import { getApiBase } from '../../lib/apiBase';
 import { useSpeechInput } from '../../hooks/useSpeechInput';
 import { speakBistro, stopSpeaking } from '../../lib/bistroSpeech';
 
+type ChatMode = 'text' | 'voice';
+
+const modeToggleStyles = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    borderWidth: 1,
+    borderRadius: 100,
+    padding: 3,
+    gap: 2,
+  },
+  btn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 100,
+  },
+  label: { fontFamily: Fonts.sans, fontSize: 11, letterSpacing: 0.4 },
+});
+
+function ModeToggle({
+  mode,
+  onChange,
+}: {
+  mode: ChatMode;
+  onChange: (mode: ChatMode) => void;
+}) {
+  const { colors } = useTheme();
+  return (
+    <View style={[modeToggleStyles.row, { backgroundColor: colors.bgElevated, borderColor: colors.border }]}>
+      {(['text', 'voice'] as const).map((key) => {
+        const active = mode === key;
+        return (
+          <TouchableOpacity
+            key={key}
+            onPress={() => onChange(key)}
+            style={[modeToggleStyles.btn, active && { backgroundColor: colors.goldMuted }]}
+            activeOpacity={0.85}
+          >
+            <Text
+              style={[
+                modeToggleStyles.label,
+                { color: active ? colors.gold : colors.creamMuted },
+                active && { fontFamily: Fonts.sansBold },
+              ]}
+            >
+              {key === 'text' ? 'Text' : 'Voice'}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
 const API_BASE = getApiBase();
 
-const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 85 : 65;
+const TAB_BAR_HEIGHT = TAB_BAR_INSET;
 
 type Message = {
   id: string;
@@ -28,7 +83,7 @@ type Message = {
 const WELCOME: Message = {
   id: 'welcome',
   role: 'assistant',
-  text: "Good evening. I'm Bistro, your personal dining assistant. Type or tap the microphone to tell me what you'd like — I'll read replies aloud.\n\nTry saying:\n• \"Add a wagyu burger\"\n• \"Remove onions from my burger\"\n• \"What's popular tonight?\"",
+  text: "Good evening. I'm Bistro, your personal dining assistant. Use Text to type or tap the mic, or switch to Voice for a hands-free call.\n\nTry saying:\n• \"Add a wagyu burger\"\n• \"Remove onions from my burger\"\n• \"What's popular tonight?\"",
   timestamp: new Date(),
 };
 
@@ -138,18 +193,13 @@ export default function ChatScreen() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
-  const [speakReplies, setSpeakReplies] = useState(true);
+  const [chatMode, setChatMode] = useState<ChatMode>('text');
   const flatListRef = useRef<FlatList>(null);
   const inputBottom = useRef(new Animated.Value(TAB_BAR_HEIGHT)).current;
   const micPulse = useRef(new Animated.Value(1)).current;
-  const speakRepliesRef = useRef(speakReplies);
-
-  speakRepliesRef.current = speakReplies;
 
   const maybeSpeakReply = useCallback((text: string) => {
-    if (speakRepliesRef.current && text.trim()) {
-      speakBistro(text);
-    }
+    if (text.trim()) speakBistro(text);
   }, []);
 
   // Typing queue — incoming chunks get buffered here, drained char-by-char
@@ -387,36 +437,47 @@ export default function ChatScreen() {
     speakBistro(text);
   };
 
+  const switchMode = (next: ChatMode) => {
+    if (next === chatMode) return;
+    if (next === 'text') {
+      if (listening) stopListening();
+      Keyboard.dismiss();
+    } else {
+      stopSpeaking();
+      setVoiceError(null);
+      Keyboard.dismiss();
+    }
+    setChatMode(next);
+  };
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.bg }]} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <BistroAvatarLarge />
+        {chatMode === 'text' ? (
+          <BistroAvatarLarge />
+        ) : (
+          <View style={[styles.voiceHeaderIcon, { borderColor: colors.border, backgroundColor: colors.bgElevated }]}>
+            <Text style={[styles.voiceHeaderGlyph, { color: colors.gold }]}>◎</Text>
+          </View>
+        )}
         <View style={styles.headerText}>
           <Text style={[styles.headerName, { color: colors.cream }]}>Bistro</Text>
           <View style={styles.onlineRow}>
-            <View style={[styles.onlineDot, { backgroundColor: '#52B788' }]} />
-            <Text style={[styles.onlineText, { color: colors.creamMuted }]}>Your dining assistant</Text>
+            <View style={[styles.onlineDot, { backgroundColor: chatMode === 'voice' ? colors.gold : '#52B788' }]} />
+            <Text style={[styles.onlineText, { color: colors.creamMuted }]}>
+              {chatMode === 'voice' ? 'Voice ordering' : 'Your dining assistant'}
+            </Text>
           </View>
         </View>
-        <TouchableOpacity
-          onPress={() => {
-            if (speakReplies) stopSpeaking();
-            setSpeakReplies((on) => !on);
-          }}
-          style={[styles.speakToggle, { backgroundColor: colors.bgElevated, borderColor: colors.border }]}
-          accessibilityLabel={speakReplies ? 'Mute Bistro replies' : 'Hear Bistro replies'}
-          activeOpacity={0.8}
-        >
-          <Text style={[styles.speakToggleIcon, { color: speakReplies ? colors.gold : colors.creamMuted }]}>
-            {speakReplies ? '🔊' : '🔇'}
-          </Text>
-        </TouchableOpacity>
+        <ModeToggle mode={chatMode} onChange={switchMode} />
       </View>
 
       <View style={[styles.headerRule, { backgroundColor: colors.borderSubtle }]} />
 
-      {/* Messages + input */}
+      {chatMode === 'voice' ? (
+        <VoiceModePanel bottomInset={TAB_BAR_INSET} />
+      ) : (
       <Animated.View style={[styles.flex, { paddingBottom: inputBottom }]}>
         <FlatList
           ref={flatListRef}
@@ -425,7 +486,7 @@ export default function ChatScreen() {
           renderItem={({ item }) => (
             <ChatBubble
               message={item}
-              onReplay={speakReplies ? handleReplay : undefined}
+              onReplay={handleReplay}
             />
           )}
           contentContainerStyle={styles.messageList}
@@ -501,6 +562,7 @@ export default function ChatScreen() {
           </View>
         </View>
       </Animated.View>
+      )}
     </SafeAreaView>
   );
 }
@@ -517,6 +579,15 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   headerText: { flex: 1 },
+  voiceHeaderIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  voiceHeaderGlyph: { fontSize: 22, lineHeight: 26 },
   headerName: { fontFamily: Fonts.display, fontSize: 22, lineHeight: 26 },
   onlineRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 2 },
   onlineDot: { width: 6, height: 6, borderRadius: 3 },
@@ -538,15 +609,6 @@ const styles = StyleSheet.create({
   },
   bubbleTime: { fontFamily: Fonts.sans, fontSize: 10 },
   replayHint: { fontFamily: Fonts.sans, fontSize: 9, letterSpacing: 0.3 },
-  speakToggle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  speakToggleIcon: { fontSize: 18, lineHeight: 20 },
   typingBubble: { flexDirection: 'row', gap: 5, paddingVertical: 14, paddingHorizontal: 16, alignItems: 'center' },
   typingDot: { width: 7, height: 7, borderRadius: 3.5 },
   suggestions: { flexDirection: 'row', paddingHorizontal: Spacing.md, paddingBottom: 8, gap: 8, flexWrap: 'wrap' },
