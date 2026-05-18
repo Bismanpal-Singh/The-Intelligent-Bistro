@@ -4,7 +4,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../context/ThemeContext';
 import { Fonts, Spacing } from '../../constants/theme';
-import { useCartStore } from '../../store/cartStore';
+import { lineUnitPrice } from '../../data/customizations';
+import { formatCartCustomizations, useCartStore } from '../../store/cartStore';
 
 function DashedLine() {
   const { colors } = useTheme();
@@ -19,64 +20,57 @@ function DashedLine() {
 
 function CartRow({ item }: { item: ReturnType<typeof useCartStore.getState>['items'][0] }) {
   const { colors } = useTheme();
-  const { updateQuantity, removeItem } = useCartStore();
-  return (
-    <View style={styles.cartRow}>
-      <View style={styles.cartRowLeft}>
-        <View style={[styles.cartQtyWrap, { backgroundColor: colors.bgElevated, borderColor: colors.border }]}>
-          <TouchableOpacity onPress={() => entry_qty === 1 ? removeItem(item.id) : updateQuantity(item.id, item.quantity - 1)} style={styles.cartQtyBtn} activeOpacity={0.7}>
-            <Text style={[styles.cartQtyBtnText, { color: colors.gold }]}>−</Text>
-          </TouchableOpacity>
-          <Text style={[styles.cartQty, { color: colors.cream }]}>{item.quantity}</Text>
-          <TouchableOpacity onPress={() => updateQuantity(item.id, item.quantity + 1)} style={styles.cartQtyBtn} activeOpacity={0.7}>
-            <Text style={[styles.cartQtyBtnText, { color: colors.gold }]}>+</Text>
-          </TouchableOpacity>
-        </View>
-        <View style={styles.cartItemInfo}>
-          <Text style={[styles.cartItemName, { color: colors.cream }]} numberOfLines={1}>{item.name}</Text>
-          <Text style={[styles.cartItemUnit, { color: colors.creamMuted }]}>${item.price.toFixed(2)} each</Text>
-        </View>
-      </View>
-      <View style={styles.cartRowRight}>
-        <Text style={[styles.cartItemTotal, { color: colors.gold }]}>${(item.price * item.quantity).toFixed(2)}</Text>
-        <TouchableOpacity onPress={() => removeItem(item.id)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Text style={[styles.removeBtn, { color: colors.creamMuted }]}>✕</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-}
+  const { updateQuantity, removeItem, lineTotal } = useCartStore();
+  const unitPrice = lineUnitPrice(item.price, item.itemId, item.customizations);
+  const customizationText = formatCartCustomizations(item.itemId, item.customizations);
 
-// needed to reference quantity outside closure
-const entry_qty = 1; // placeholder, actual qty comes from item prop
-
-function CartRowFixed({ item }: { item: ReturnType<typeof useCartStore.getState>['items'][0] }) {
-  const { colors } = useTheme();
-  const { updateQuantity, removeItem } = useCartStore();
   return (
     <View style={styles.cartRow}>
       <View style={styles.cartRowLeft}>
         <View style={[styles.cartQtyWrap, { backgroundColor: colors.bgElevated, borderColor: colors.border }]}>
           <TouchableOpacity
-            onPress={() => item.quantity === 1 ? removeItem(item.id) : updateQuantity(item.id, item.quantity - 1)}
+            onPress={() =>
+              item.quantity === 1
+                ? removeItem(item.cartLineId)
+                : updateQuantity(item.cartLineId, item.quantity - 1)
+            }
             style={styles.cartQtyBtn}
             activeOpacity={0.7}
           >
             <Text style={[styles.cartQtyBtnText, { color: colors.gold }]}>−</Text>
           </TouchableOpacity>
           <Text style={[styles.cartQty, { color: colors.cream }]}>{item.quantity}</Text>
-          <TouchableOpacity onPress={() => updateQuantity(item.id, item.quantity + 1)} style={styles.cartQtyBtn} activeOpacity={0.7}>
+          <TouchableOpacity
+            onPress={() => updateQuantity(item.cartLineId, item.quantity + 1)}
+            style={styles.cartQtyBtn}
+            activeOpacity={0.7}
+          >
             <Text style={[styles.cartQtyBtnText, { color: colors.gold }]}>+</Text>
           </TouchableOpacity>
         </View>
         <View style={styles.cartItemInfo}>
-          <Text style={[styles.cartItemName, { color: colors.cream }]} numberOfLines={1}>{item.name}</Text>
-          <Text style={[styles.cartItemUnit, { color: colors.creamMuted }]}>${item.price.toFixed(2)} each</Text>
+          <Text style={[styles.cartItemName, { color: colors.cream }]} numberOfLines={1}>
+            {item.name}
+          </Text>
+          {customizationText ? (
+            <Text style={[styles.cartItemCustom, { color: colors.creamMuted }]} numberOfLines={2}>
+              {customizationText}
+            </Text>
+          ) : null}
+          <Text style={[styles.cartItemUnit, { color: colors.creamMuted }]}>
+            ${unitPrice.toFixed(2)} each
+          </Text>
         </View>
       </View>
       <View style={styles.cartRowRight}>
-        <Text style={[styles.cartItemTotal, { color: colors.gold }]}>${(item.price * item.quantity).toFixed(2)}</Text>
-        <TouchableOpacity onPress={() => removeItem(item.id)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+        <Text style={[styles.cartItemTotal, { color: colors.gold }]}>
+          ${lineTotal(item).toFixed(2)}
+        </Text>
+        <TouchableOpacity
+          onPress={() => removeItem(item.cartLineId)}
+          activeOpacity={0.6}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
           <Text style={[styles.removeBtn, { color: colors.creamMuted }]}>✕</Text>
         </TouchableOpacity>
       </View>
@@ -133,7 +127,6 @@ export default function CartScreen() {
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <View style={[styles.receipt, { backgroundColor: colors.bgCard, borderColor: colors.borderSubtle }]}>
-          {/* Receipt header */}
           <View style={styles.receiptHeader}>
             <Text style={[styles.receiptBistro, { color: colors.gold }]}>THE BISTRO</Text>
             <Text style={[styles.receiptDate, { color: colors.creamMuted }]}>
@@ -147,7 +140,9 @@ export default function CartScreen() {
           <DashedLine />
 
           <View style={styles.itemsSection}>
-            {items.map((item) => <CartRowFixed key={item.id} item={item} />)}
+            {items.map((item) => (
+              <CartRow key={item.cartLineId} item={item} />
+            ))}
           </View>
 
           <DashedLine />
@@ -223,6 +218,7 @@ const styles = StyleSheet.create({
   cartQty: { fontFamily: Fonts.sansBold, fontSize: 13, minWidth: 18, textAlign: 'center' },
   cartItemInfo: { flex: 1 },
   cartItemName: { fontFamily: Fonts.sansMedium, fontSize: 13 },
+  cartItemCustom: { fontFamily: Fonts.sans, fontSize: 10, marginTop: 2, lineHeight: 14 },
   cartItemUnit: { fontFamily: Fonts.sans, fontSize: 11, marginTop: 1 },
   cartItemTotal: { fontFamily: Fonts.sansBold, fontSize: 14 },
   removeBtn: { fontSize: 11 },

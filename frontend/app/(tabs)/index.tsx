@@ -8,6 +8,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../../context/ThemeContext';
 import { Fonts, Spacing } from '../../constants/theme';
 import { CATEGORIES, MENU_ITEMS, MenuItem } from '../../data/menu';
+import { itemHasCustomizations } from '../../data/customizations';
 import { useCartStore } from '../../store/cartStore';
 import MenuItemModal from '../../components/MenuItemModal';
 
@@ -82,18 +83,18 @@ function FeaturedCard({ item, onPress }: { item: MenuItem; onPress: () => void }
 }
 
 // ─── Quantity Control ──────────────────────────────────────────────────────────
-function QuantityControl({ item }: { item: MenuItem }) {
+function QuantityControl({ item, onAdd }: { item: MenuItem; onAdd: () => void }) {
   const { colors } = useTheme();
-  const { updateQuantity, removeItem, items } = useCartStore();
-  const entry = items.find((i) => i.id === item.id);
-  if (!entry) return null;
+  const { decrementItem, getItemQuantity } = useCartStore();
+  const qty = getItemQuantity(item.id);
+  if (qty === 0) return null;
   return (
     <View style={[styles.qtyControl, { backgroundColor: colors.bgElevated, borderColor: colors.border }]}>
-      <TouchableOpacity onPress={() => entry.quantity === 1 ? removeItem(item.id) : updateQuantity(item.id, entry.quantity - 1)} style={styles.qtyBtn} activeOpacity={0.7}>
+      <TouchableOpacity onPress={() => decrementItem(item.id)} style={styles.qtyBtn} activeOpacity={0.7}>
         <Text style={[styles.qtyBtnText, { color: colors.gold }]}>−</Text>
       </TouchableOpacity>
-      <Text style={[styles.qtyValue, { color: colors.cream }]}>{entry.quantity}</Text>
-      <TouchableOpacity onPress={() => updateQuantity(item.id, entry.quantity + 1)} style={styles.qtyBtn} activeOpacity={0.7}>
+      <Text style={[styles.qtyValue, { color: colors.cream }]}>{qty}</Text>
+      <TouchableOpacity onPress={onAdd} style={styles.qtyBtn} activeOpacity={0.7}>
         <Text style={[styles.qtyBtnText, { color: colors.gold }]}>+</Text>
       </TouchableOpacity>
     </View>
@@ -104,8 +105,9 @@ function QuantityControl({ item }: { item: MenuItem }) {
 function MenuCard({ item, onPress, index = 0 }: { item: MenuItem; onPress: () => void; index?: number }) {
   const { colors, isDark } = useTheme();
   const addItem = useCartStore((s) => s.addItem);
-  const cartItems = useCartStore((s) => s.items);
-  const cartEntry = cartItems.find((i) => i.id === item.id);
+  const getItemQuantity = useCartStore((s) => s.getItemQuantity);
+  const cartQty = getItemQuantity(item.id);
+  const customizable = itemHasCustomizations(item.id);
   const [imgError, setImgError] = useState(false);
   const scale = useRef(new Animated.Value(1)).current;
   const opacity = useRef(new Animated.Value(0)).current;
@@ -119,7 +121,8 @@ function MenuCard({ item, onPress, index = 0 }: { item: MenuItem; onPress: () =>
       Animated.spring(scale, { toValue: 0.96, useNativeDriver: true, speed: 50 }),
       Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 20 }),
     ]).start();
-    addItem(item);
+    if (customizable) onPress();
+    else addItem(item);
   };
 
   const gradients: [string, string][] = isDark
@@ -162,8 +165,8 @@ function MenuCard({ item, onPress, index = 0 }: { item: MenuItem; onPress: () =>
                   </View>
                 )}
               </View>
-              {cartEntry ? (
-                <QuantityControl item={item} />
+              {cartQty > 0 ? (
+                <QuantityControl item={item} onAdd={handleAdd} />
               ) : (
                 <TouchableOpacity onPress={handleAdd} style={[styles.addBtn, { backgroundColor: colors.goldMuted, borderColor: colors.border }]} activeOpacity={0.8}>
                   <Text style={[styles.addBtnText, { color: colors.gold }]}>+ Add</Text>

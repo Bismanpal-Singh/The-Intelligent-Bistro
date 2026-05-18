@@ -6,11 +6,23 @@ config({ path: join(__dirname, '.env') });
 
 import express from 'express';
 import cors from 'cors';
+import multer from 'multer';
 import Anthropic from '@anthropic-ai/sdk';
+import {
+  customizationGuideForPrompt,
+  formatCustomizationsHuman,
+  lineUnitPrice,
+} from './customizations.js';
+import { transcribeAudioBuffer } from './transcribe.js';
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 12 * 1024 * 1024 },
+});
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -56,7 +68,17 @@ const SYSTEM_PROMPT = `You are Bistro, an elegant and attentive AI dining assist
 
 You can browse the menu, answer questions about dishes, and manage the guest's order using the tools provided. Always confirm what you've done after taking an action (e.g. "I've added two Wagyu Burgers to your order").
 
-When a guest asks what's popular, refer to items marked ★. When removing items, always confirm the item name before calling the tool. If a guest is vague (e.g. "the burger"), check the cart context they provided and clarify if there's ambiguity.
+When a guest asks what's popular, refer to items marked ★. If a guest is vague (e.g. "the burger"), use cart context to pick the right cartLineId.
+
+Customization rules (important):
+- Adding a NEW dish with changes → add_to_cart with customizations (full object).
+- Changing an item ALREADY in the cart (e.g. "remove onions from my burger", "add extra cheese to my burger") → update_customizations with a patch on that line's cartLineId. Do NOT use remove_from_cart for ingredient requests.
+- Removing the whole dish from the order → remove_from_cart.
+- Each cart line shows cartLineId, human-readable customizations, and option ids — use them to target the correct line.
+- If exactly one line matches the dish (e.g. only one wagyu-burger), you may pass itemId instead of cartLineId for update_customizations.
+
+Customization catalog:
+${customizationGuideForPrompt()}
 
 Never invent items that aren't on the menu. If asked for something not available, suggest the closest alternative with flair.
 
@@ -83,35 +105,102 @@ const TOOLS = [
           minimum: 1,
           description: 'How many to add (default 1)',
         },
+        customizations: {
+          type: 'object',
+          description: 'Optional customizations for customizable items',
+          properties: {
+            addOns: { type: 'array', items: { type: 'string' } },
+            removals: { type: 'array', items: { type: 'string' } },
+            substitutions: { type: 'array', items: { type: 'string' } },
+            notes: { type: 'string' },
+          },
+        },
       },
       required: ['itemId', 'quantity'],
     },
   },
   {
     name: 'remove_from_cart',
-    description: 'Remove a menu item from the guest\'s order entirely.',
+    description: 'Remove item(s) from the cart. Use cartLineId for a specific line; itemId removes all lines of that dish.',
     input_schema: {
       type: 'object',
       properties: {
+        cartLineId: {
+          type: 'string',
+          description: 'Specific cart line id from cart context',
+        },
         itemId: {
           type: 'string',
           enum: MENU_IDS,
-          description: 'The item id to remove',
+          description: 'Remove all cart lines for this menu item',
         },
       },
-      required: ['itemId'],
+    },
+  },
+  {
+    name: 'update_customizations',
+    description:
+      'Modify customizations on an existing cart line. Use when the guest wants to change how an item already in their order is prepared (e.g. no onion, extra cheese, hold the tomato). Use patch fields to add or undo specific options.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        cartLineId: {
+          type: 'string',
+          description: 'Cart line id from cart context',
+        },
+        itemId: {
+          type: 'string',
+          enum: MENU_IDS,
+          description: 'Use when only one cart line exists for this menu item',
+        },
+        patch: {
+          type: 'object',
+          description: 'Changes to apply on top of existing customizations',
+          properties: {
+            addRemovals: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Ingredient removal option ids to add (e.g. no-onion)',
+            },
+            removeRemovals: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Undo a removal (guest wants ingredient back)',
+            },
+            addAddOns: { type: 'array', items: { type: 'string' } },
+            removeAddOns: { type: 'array', items: { type: 'string' } },
+            addSubstitutions: { type: 'array', items: { type: 'string' } },
+            removeSubstitutions: { type: 'array', items: { type: 'string' } },
+            notes: { type: 'string' },
+          },
+        },
+        customizations: {
+          type: 'object',
+          description: 'Optional: replace entire customizations object (prefer patch for small changes)',
+          properties: {
+            addOns: { type: 'array', items: { type: 'string' } },
+            removals: { type: 'array', items: { type: 'string' } },
+            substitutions: { type: 'array', items: { type: 'string' } },
+            notes: { type: 'string' },
+          },
+        },
+      },
     },
   },
   {
     name: 'update_quantity',
-    description: 'Set the quantity of an item already in the cart to a specific number.',
+    description: 'Set quantity for a cart line. Prefer cartLineId when multiple lines exist for the same dish.',
     input_schema: {
       type: 'object',
       properties: {
+        cartLineId: {
+          type: 'string',
+          description: 'Specific cart line id from cart context',
+        },
         itemId: {
           type: 'string',
           enum: MENU_IDS,
-          description: 'The item id to update',
+          description: 'Use only when a single line exists for this item',
         },
         quantity: {
           type: 'integer',
@@ -119,7 +208,7 @@ const TOOLS = [
           description: 'The new quantity',
         },
       },
-      required: ['itemId', 'quantity'],
+      required: ['quantity'],
     },
   },
   {
@@ -140,21 +229,55 @@ function buildMessages(history, cartContext, message) {
   ];
 }
 
+function customizationSummary(itemId, customizations = {}) {
+  const human = formatCustomizationsHuman(itemId, customizations);
+  const ids = [];
+  if (customizations.removals?.length) ids.push(`removalIds: [${customizations.removals.join(', ')}]`);
+  if (customizations.addOns?.length) ids.push(`addOnIds: [${customizations.addOns.join(', ')}]`);
+  if (customizations.substitutions?.length) ids.push(`substitutionIds: [${customizations.substitutions.join(', ')}]`);
+  if (customizations.notes) ids.push(`note: ${customizations.notes}`);
+  const idPart = ids.length ? ` | ${ids.join(' | ')}` : '';
+  return human ? ` | ${human}${idPart}` : idPart;
+}
+
 function cartContextString(cartItems) {
   return cartItems.length === 0
     ? 'The cart is currently empty.'
-    : 'Current cart:\n' + cartItems.map((i) => `- ${i.name} x${i.quantity} ($${(i.price * i.quantity).toFixed(2)})`).join('\n');
+    : 'Current cart:\n' + cartItems.map((i) => {
+        const unit = lineUnitPrice(i.price, i.itemId, i.customizations ?? {});
+        const lineTotal = unit * i.quantity;
+        const c = customizationSummary(i.itemId, i.customizations);
+        return `- ${i.name} x${i.quantity}${c} [cartLineId: ${i.cartLineId}, itemId: ${i.itemId}] — $${lineTotal.toFixed(2)}`;
+      }).join('\n');
 }
 
 function extractActions(toolBlocks) {
   const actions = [];
   for (const block of toolBlocks) {
     const { name, input } = block;
-    if (name !== 'clear_cart' && !MENU_IDS.includes(input.itemId)) continue;
-    if (name === 'add_to_cart') actions.push({ action: 'add', itemId: input.itemId, quantity: input.quantity ?? 1 });
-    else if (name === 'remove_from_cart') actions.push({ action: 'remove', itemId: input.itemId });
-    else if (name === 'update_quantity') actions.push({ action: 'update', itemId: input.itemId, quantity: input.quantity });
-    else if (name === 'clear_cart') actions.push({ action: 'clear' });
+    if (name === 'add_to_cart') {
+      if (!MENU_IDS.includes(input.itemId)) continue;
+      actions.push({
+        action: 'add',
+        itemId: input.itemId,
+        quantity: input.quantity ?? 1,
+        customizations: input.customizations,
+      });
+    } else if (name === 'remove_from_cart') {
+      if (input.cartLineId) actions.push({ action: 'remove', cartLineId: input.cartLineId });
+      else if (input.itemId && MENU_IDS.includes(input.itemId)) actions.push({ action: 'remove', itemId: input.itemId });
+    } else if (name === 'update_customizations') {
+      const payload = { action: 'update_customizations' };
+      if (input.cartLineId) payload.cartLineId = input.cartLineId;
+      else if (input.itemId && MENU_IDS.includes(input.itemId)) payload.itemId = input.itemId;
+      else continue;
+      if (input.patch) payload.patch = input.patch;
+      if (input.customizations) payload.customizations = input.customizations;
+      if (payload.patch || payload.customizations) actions.push(payload);
+    } else if (name === 'update_quantity') {
+      if (input.cartLineId) actions.push({ action: 'update', cartLineId: input.cartLineId, quantity: input.quantity });
+      else if (input.itemId && MENU_IDS.includes(input.itemId)) actions.push({ action: 'update', itemId: input.itemId, quantity: input.quantity });
+    } else if (name === 'clear_cart') actions.push({ action: 'clear' });
   }
   return actions;
 }
@@ -226,8 +349,39 @@ app.post('/api/chat/stream', async (req, res) => {
   }
 });
 
+// ─── Speech-to-text (local Whisper) — Expo Go on device, no extra API keys ───────
+app.post('/api/speech/transcribe', upload.single('audio'), async (req, res) => {
+  if (!req.file?.buffer?.length) {
+    return res.status(400).json({ error: 'No audio received.' });
+  }
+
+  try {
+    const text = await transcribeAudioBuffer(
+      req.file.buffer,
+      req.file.mimetype || 'audio/m4a'
+    );
+    if (!text) {
+      return res.status(400).json({ error: 'No speech detected. Try again.' });
+    }
+    res.json({ text });
+  } catch (err) {
+    console.error('Transcribe error:', err.message);
+    res.status(500).json({
+      error: 'Transcription failed. First run may download the speech model — keep backend online.',
+    });
+  }
+});
+
 // ─── Health check ──────────────────────────────────────────────────────────────
-app.get('/health', (_, res) => res.json({ status: 'ok' }));
+app.get('/health', (_, res) =>
+  res.json({
+    status: 'ok',
+    voice: true,
+    voiceEngine: 'local-whisper',
+  })
+);
 
 const PORT = process.env.PORT ?? 3000;
-app.listen(PORT, () => console.log(`Bistro backend running on port ${PORT}`));
+app.listen(PORT, '0.0.0.0', () =>
+  console.log(`Bistro backend running on http://0.0.0.0:${PORT}`)
+);

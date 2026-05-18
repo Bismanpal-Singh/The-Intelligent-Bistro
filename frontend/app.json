@@ -14,7 +14,14 @@
       "backgroundColor": "#0D0D0D"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        },
+        "NSMicrophoneUsageDescription": "Allow Bistro to use the microphone for voice orders."
+      },
+      "bundleIdentifier": "com.anonymous.intelligent-bistro"
     },
     "android": {
       "adaptiveIcon": {
@@ -22,7 +29,11 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "usesCleartextTraffic": true,
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"

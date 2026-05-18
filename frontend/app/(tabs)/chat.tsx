@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
   StyleSheet, Platform, Animated, Keyboard,
@@ -10,9 +10,11 @@ import { Fonts, Spacing } from '../../constants/theme';
 import { useCartStore } from '../../store/cartStore';
 import { MENU_ITEMS } from '../../data/menu';
 import BistroAvatar, { BistroAvatarLarge } from '../../components/BistroAvatar';
+import { getApiBase } from '../../lib/apiBase';
+import { useSpeechInput } from '../../hooks/useSpeechInput';
+import { speakBistro, stopSpeaking } from '../../lib/bistroSpeech';
 
-// ── Update this to your machine's local IP when running on a physical device ──
-const API_BASE = 'http://192.168.3.239:3000';
+const API_BASE = getApiBase();
 
 const TAB_BAR_HEIGHT = Platform.OS === 'ios' ? 85 : 65;
 
@@ -26,13 +28,20 @@ type Message = {
 const WELCOME: Message = {
   id: 'welcome',
   role: 'assistant',
-  text: "Good evening. I'm Bistro, your personal dining assistant. Tell me what you're in the mood for, and I'll take care of the rest.\n\nTry saying:\n• \"Add two wagyu burgers\"\n• \"What's popular tonight?\"\n• \"Remove the fries from my order\"",
+  text: "Good evening. I'm Bistro, your personal dining assistant. Type or tap the microphone to tell me what you'd like — I'll read replies aloud.\n\nTry saying:\n• \"Add a wagyu burger\"\n• \"Remove onions from my burger\"\n• \"What's popular tonight?\"",
   timestamp: new Date(),
 };
 
-function ChatBubble({ message }: { message: Message }) {
+function ChatBubble({
+  message,
+  onReplay,
+}: {
+  message: Message;
+  onReplay?: (text: string) => void;
+}) {
   const { colors } = useTheme();
   const isUser = message.role === 'user';
+  const canReplay = !isUser && !!message.text && onReplay;
   const opacity = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(8)).current;
 
@@ -43,7 +52,7 @@ function ChatBubble({ message }: { message: Message }) {
     ]).start();
   }, []);
 
-  return (
+  const bubble = (
     <Animated.View style={[
       styles.bubbleWrap,
       isUser && styles.bubbleWrapUser,
@@ -59,12 +68,27 @@ function ChatBubble({ message }: { message: Message }) {
           : [styles.bubbleAssistant, { backgroundColor: colors.bgCard, borderColor: colors.borderSubtle }],
       ]}>
         <Text style={[styles.bubbleText, { color: colors.cream }]}>{message.text}</Text>
-        <Text style={[styles.bubbleTime, { color: isUser ? colors.goldDim : colors.creamMuted }]}>
-          {message.timestamp.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
-        </Text>
+        <View style={styles.bubbleFooter}>
+          <Text style={[styles.bubbleTime, { color: isUser ? colors.goldDim : colors.creamMuted }]}>
+            {message.timestamp.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+          </Text>
+          {canReplay ? (
+            <Text style={[styles.replayHint, { color: colors.goldDim }]}>Tap to hear</Text>
+          ) : null}
+        </View>
       </View>
     </Animated.View>
   );
+
+  if (canReplay) {
+    return (
+      <TouchableOpacity onPress={() => onReplay(message.text)} activeOpacity={0.88}>
+        {bubble}
+      </TouchableOpacity>
+    );
+  }
+
+  return bubble;
 }
 
 function TypingIndicator() {
@@ -113,9 +137,20 @@ export default function ChatScreen() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [speakReplies, setSpeakReplies] = useState(true);
   const flatListRef = useRef<FlatList>(null);
-  const { addItem, removeItem, updateQuantity, clearCart, items } = useCartStore();
   const inputBottom = useRef(new Animated.Value(TAB_BAR_HEIGHT)).current;
+  const micPulse = useRef(new Animated.Value(1)).current;
+  const speakRepliesRef = useRef(speakReplies);
+
+  speakRepliesRef.current = speakReplies;
+
+  const maybeSpeakReply = useCallback((text: string) => {
+    if (speakRepliesRef.current && text.trim()) {
+      speakBistro(text);
+    }
+  }, []);
 
   // Typing queue — incoming chunks get buffered here, drained char-by-char
   const typingQueue = useRef('');
@@ -174,27 +209,53 @@ export default function ChatScreen() {
     return () => clearTimeout(timer);
   }, [messages.length, loading]);
 
+  useEffect(() => {
+    if (__DEV__) console.log('[Bistro] API_BASE:', API_BASE);
+  }, []);
+
+  useEffect(() => () => stopSpeaking(), []);
+
   const applyActions = (actions: any[]) => {
     for (const action of actions) {
+      const store = useCartStore.getState();
       if (action.action === 'add') {
         const item = MENU_ITEMS.find((m) => m.id === action.itemId);
-        if (item) for (let i = 0; i < (action.quantity ?? 1); i++) addItem(item);
+        if (item) store.addItem(item, action.quantity ?? 1, action.customizations);
       } else if (action.action === 'remove') {
-        const item = MENU_ITEMS.find((m) => m.id === action.itemId);
-        if (item) removeItem(item.id);
+        if (action.cartLineId) store.removeItem(action.cartLineId);
+        else if (action.itemId) store.removeAllForItem(action.itemId);
       } else if (action.action === 'update') {
-        const item = MENU_ITEMS.find((m) => m.id === action.itemId);
-        if (item) updateQuantity(item.id, action.quantity);
+        if (action.cartLineId) {
+          store.updateQuantity(action.cartLineId, action.quantity);
+        } else if (action.itemId) {
+          const lines = store.items.filter((i) => i.itemId === action.itemId);
+          if (lines.length === 1) store.updateQuantity(lines[0].cartLineId, action.quantity);
+        }
+      } else if (action.action === 'update_customizations') {
+        const cart = useCartStore.getState().items;
+        const lineId =
+          action.cartLineId ??
+          (action.itemId
+            ? cart.filter((i) => i.itemId === action.itemId).length === 1
+              ? cart.find((i) => i.itemId === action.itemId)!.cartLineId
+              : null
+            : null);
+        if (!lineId) continue;
+        const cartStore = useCartStore.getState();
+        if (action.patch) cartStore.patchCustomizations(lineId, action.patch);
+        else if (action.customizations) cartStore.updateCustomizations(lineId, action.customizations);
       } else if (action.action === 'clear') {
-        clearCart();
+        store.clearCart();
       }
     }
   };
 
-  const sendMessage = async () => {
-    const text = input.trim();
+  const sendMessage = useCallback(async (textOverride?: string) => {
+    const text = (textOverride ?? input).trim();
     if (!text || loading) return;
 
+    setVoiceError(null);
+    stopSpeaking();
     const userMsg: Message = { id: Date.now().toString(), role: 'user', text, timestamp: new Date() };
     setMessages((prev) => [...prev, userMsg]);
     setInput('');
@@ -208,8 +269,23 @@ export default function ChatScreen() {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', `${API_BASE}/api/chat/stream`);
       xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.timeout = 120000;
 
       let processed = 0;
+
+      const fail = (reason: string) => {
+        stopTyping();
+        setLoading(false);
+        const failText = `${reason}\n\nBackend: ${API_BASE}\n• Backend running: cd backend && npm start\n• Same Wi‑Fi as this phone\n• macOS Firewall: allow Node incoming connections`;
+        setMessages((prev) => [...prev, {
+          id: assistantId,
+          role: 'assistant',
+          text: failText,
+          timestamp: new Date(),
+        }]);
+        maybeSpeakReply(reason);
+        resolve();
+      };
 
       const handleChunk = (chunk: string) => {
         const lines = chunk.split('\n');
@@ -235,6 +311,7 @@ export default function ChatScreen() {
                 } else {
                   stopTyping();
                   setHistory((prev) => [...prev, { role: 'user', content: text }, { role: 'assistant', content: fullText }]);
+                  maybeSpeakReply(fullText);
                 }
               };
               waitAndSave();
@@ -249,26 +326,65 @@ export default function ChatScreen() {
         handleChunk(newChunk);
       };
 
+      xhr.onerror = () => fail("Can't reach the server.");
+      xhr.ontimeout = () => fail('Request timed out.');
       xhr.onload = () => {
+        if (xhr.status >= 400) {
+          fail(`Server error (${xhr.status}).`);
+          return;
+        }
         const newChunk = xhr.responseText.slice(processed);
         if (newChunk) handleChunk(newChunk);
         resolve();
       };
 
-      xhr.onerror = () => {
-        stopTyping();
-        setLoading(false);
-        setMessages((prev) => [...prev, {
-          id: assistantId,
-          role: 'assistant',
-          text: "I'm having trouble connecting right now. Please try again in a moment.",
-          timestamp: new Date(),
-        }]);
-        resolve();
-      };
-
-      xhr.send(JSON.stringify({ message: text, cartItems: items, history }));
+      xhr.send(JSON.stringify({
+        message: text,
+        cartItems: useCartStore.getState().items,
+        history,
+      }));
     });
+  }, [input, loading, history, maybeSpeakReply]);
+
+  const sendMessageRef = useRef(sendMessage);
+  sendMessageRef.current = sendMessage;
+
+  const { listening, partialTranscript, toggleListening, stopListening } = useSpeechInput({
+    onFinalTranscript: (text) => {
+      sendMessageRef.current(text);
+    },
+    onError: (message) => setVoiceError(message),
+  });
+
+  useEffect(() => {
+    if (!listening) {
+      micPulse.setValue(1);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(micPulse, { toValue: 1.12, duration: 500, useNativeDriver: true }),
+        Animated.timing(micPulse, { toValue: 1, duration: 500, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [listening, micPulse]);
+
+  useEffect(() => {
+    if (loading && listening) stopListening();
+  }, [loading, listening, stopListening]);
+
+  const handleMicPress = () => {
+    if (loading) return;
+    setVoiceError(null);
+    stopSpeaking();
+    toggleListening();
+  };
+
+  const handleReplay = (text: string) => {
+    stopSpeaking();
+    speakBistro(text);
   };
 
   return (
@@ -283,6 +399,19 @@ export default function ChatScreen() {
             <Text style={[styles.onlineText, { color: colors.creamMuted }]}>Your dining assistant</Text>
           </View>
         </View>
+        <TouchableOpacity
+          onPress={() => {
+            if (speakReplies) stopSpeaking();
+            setSpeakReplies((on) => !on);
+          }}
+          style={[styles.speakToggle, { backgroundColor: colors.bgElevated, borderColor: colors.border }]}
+          accessibilityLabel={speakReplies ? 'Mute Bistro replies' : 'Hear Bistro replies'}
+          activeOpacity={0.8}
+        >
+          <Text style={[styles.speakToggleIcon, { color: speakReplies ? colors.gold : colors.creamMuted }]}>
+            {speakReplies ? '🔊' : '🔇'}
+          </Text>
+        </TouchableOpacity>
       </View>
 
       <View style={[styles.headerRule, { backgroundColor: colors.borderSubtle }]} />
@@ -293,7 +422,12 @@ export default function ChatScreen() {
           ref={flatListRef}
           data={messages}
           keyExtractor={(m) => m.id}
-          renderItem={({ item }) => <ChatBubble message={item} />}
+          renderItem={({ item }) => (
+            <ChatBubble
+              message={item}
+              onReplay={speakReplies ? handleReplay : undefined}
+            />
+          )}
           contentContainerStyle={styles.messageList}
           showsVerticalScrollIndicator={false}
           ListFooterComponent={loading ? <TypingIndicator /> : null}
@@ -312,26 +446,56 @@ export default function ChatScreen() {
 
         {/* Input bar */}
         <View style={[styles.inputWrap, { backgroundColor: colors.inputBg, borderTopColor: colors.borderSubtle }]}>
+          {listening && (
+            <Text style={[styles.listeningHint, { color: colors.gold }]}>
+              Listening… {partialTranscript ? `"${partialTranscript}"` : 'speak now'}
+            </Text>
+          )}
+          {voiceError ? (
+            <Text style={[styles.voiceError, { color: '#E07A5F' }]}>{voiceError}</Text>
+          ) : null}
           <View style={styles.inputRow}>
+            <TouchableOpacity
+              onPress={handleMicPress}
+              disabled={loading}
+              activeOpacity={0.8}
+              accessibilityLabel={listening ? 'Stop listening' : 'Start voice input'}
+            >
+              <Animated.View
+                style={[
+                  styles.micBtn,
+                  {
+                    backgroundColor: listening ? colors.goldMuted : colors.bgElevated,
+                    borderColor: listening ? colors.gold : colors.border,
+                    transform: [{ scale: micPulse }],
+                  },
+                ]}
+              >
+                <Text style={[styles.micIcon, { color: listening ? colors.gold : colors.creamMuted }]}>
+                  {listening ? '◉' : '🎙'}
+                </Text>
+              </Animated.View>
+            </TouchableOpacity>
 
             <TextInput
               value={input}
               onChangeText={setInput}
-              placeholder="Tell Bistro what you'd like..."
+              placeholder={listening ? 'Listening…' : "Tell Bistro what you'd like..."}
               placeholderTextColor={colors.creamMuted}
               style={[styles.input, { color: colors.cream }]}
               multiline
               maxLength={300}
               returnKeyType="send"
-              onSubmitEditing={sendMessage}
+              onSubmitEditing={() => sendMessage()}
               blurOnSubmit
+              editable={!listening && !loading}
             />
-            <TouchableOpacity onPress={sendMessage} disabled={!input.trim() || loading} activeOpacity={0.8}>
+            <TouchableOpacity onPress={() => sendMessage()} disabled={!input.trim() || loading || listening} activeOpacity={0.8}>
               <LinearGradient
-                colors={input.trim() && !loading ? [colors.gold, colors.goldDim] : [colors.bgElevated, colors.bgElevated]}
+                colors={input.trim() && !loading && !listening ? [colors.gold, colors.goldDim] : [colors.bgElevated, colors.bgElevated]}
                 style={styles.sendBtn}
               >
-                <Text style={[styles.sendIcon, { color: input.trim() && !loading ? '#0D0D0D' : colors.creamMuted }]}>↑</Text>
+                <Text style={[styles.sendIcon, { color: input.trim() && !loading && !listening ? '#0D0D0D' : colors.creamMuted }]}>↑</Text>
               </LinearGradient>
             </TouchableOpacity>
           </View>
@@ -365,7 +529,24 @@ const styles = StyleSheet.create({
   bubbleAssistant: { borderWidth: 1, borderBottomLeftRadius: 4 },
   bubbleUser: { borderWidth: 1, borderBottomRightRadius: 4 },
   bubbleText: { fontFamily: Fonts.sans, fontSize: 14, lineHeight: 20 },
-  bubbleTime: { fontFamily: Fonts.sans, fontSize: 10, alignSelf: 'flex-end', marginTop: 2 },
+  bubbleFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 2,
+    gap: 8,
+  },
+  bubbleTime: { fontFamily: Fonts.sans, fontSize: 10 },
+  replayHint: { fontFamily: Fonts.sans, fontSize: 9, letterSpacing: 0.3 },
+  speakToggle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  speakToggleIcon: { fontSize: 18, lineHeight: 20 },
   typingBubble: { flexDirection: 'row', gap: 5, paddingVertical: 14, paddingHorizontal: 16, alignItems: 'center' },
   typingDot: { width: 7, height: 7, borderRadius: 3.5 },
   suggestions: { flexDirection: 'row', paddingHorizontal: Spacing.md, paddingBottom: 8, gap: 8, flexWrap: 'wrap' },
@@ -378,6 +559,29 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
   },
   inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 10 },
+  listeningHint: {
+    fontFamily: Fonts.sansMedium,
+    fontSize: 12,
+    letterSpacing: 0.3,
+    marginBottom: 8,
+    paddingHorizontal: 2,
+  },
+  voiceError: {
+    fontFamily: Fonts.sans,
+    fontSize: 11,
+    marginBottom: 6,
+    paddingHorizontal: 2,
+  },
+  micBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 2,
+  },
+  micIcon: { fontSize: 16, lineHeight: 18 },
   input: {
     flex: 1,
     fontFamily: Fonts.sans,

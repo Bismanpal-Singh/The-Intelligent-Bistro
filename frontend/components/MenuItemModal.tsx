@@ -16,6 +16,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../context/ThemeContext';
 import { Fonts, Spacing } from '../constants/theme';
 import { MenuItem, CATEGORIES } from '../data/menu';
+import {
+  CartCustomizations,
+  CustomizationOption,
+  getCustomizationOptions,
+  itemHasCustomizations,
+  lineUnitPrice,
+} from '../data/customizations';
 import { useCartStore } from '../store/cartStore';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -38,12 +45,75 @@ const ALLERGEN_ICONS: Record<string, string> = {
   Sulphites: '🍷',
 };
 
+function CustomizationChip({
+  option,
+  selected,
+  onToggle,
+}: {
+  option: CustomizationOption;
+  selected: boolean;
+  onToggle: () => void;
+}) {
+  const { colors } = useTheme();
+  const priceLabel = option.price ? ` +$${option.price.toFixed(2)}` : '';
+
+  return (
+    <TouchableOpacity
+      onPress={onToggle}
+      activeOpacity={0.75}
+      style={[
+        styles.customChip,
+        {
+          backgroundColor: selected ? colors.goldMuted : colors.bgElevated,
+          borderColor: selected ? colors.gold : colors.borderSubtle,
+        },
+      ]}
+    >
+      <Text style={[styles.customChipText, { color: selected ? colors.gold : colors.creamMuted }]}>
+        {option.label}
+        {priceLabel}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+function CustomizationSection({
+  title,
+  options,
+  selectedIds,
+  onToggle,
+}: {
+  title: string;
+  options: CustomizationOption[];
+  selectedIds: string[];
+  onToggle: (id: string) => void;
+}) {
+  const { colors } = useTheme();
+  if (options.length === 0) return null;
+
+  return (
+    <View style={styles.customSection}>
+      <Text style={[styles.sectionTitle, { color: colors.cream }]}>{title}</Text>
+      <View style={styles.customChipRow}>
+        {options.map((opt) => (
+          <CustomizationChip
+            key={opt.id}
+            option={opt}
+            selected={selectedIds.includes(opt.id)}
+            onToggle={() => onToggle(opt.id)}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
 export default function MenuItemModal({ item, onClose }: Props) {
   const { colors, isDark } = useTheme();
   const insets = useSafeAreaInsets();
-  const { addItem, removeItem, updateQuantity, items } = useCartStore();
-  const cartEntry = item ? items.find((i) => i.id === item.id) : null;
+  const { addItem, getItemQuantity, decrementItem } = useCartStore();
   const [imgError, setImgError] = useState(false);
+  const [customizations, setCustomizations] = useState<CartCustomizations>({});
 
   const translateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
@@ -51,6 +121,7 @@ export default function MenuItemModal({ item, onClose }: Props) {
   useEffect(() => {
     if (item) {
       setImgError(false);
+      setCustomizations({});
       Animated.parallel([
         Animated.timing(backdropOpacity, { toValue: 1, duration: 300, useNativeDriver: true }),
         Animated.spring(translateY, { toValue: 0, useNativeDriver: true, damping: 22, stiffness: 180 }),
@@ -68,6 +139,20 @@ export default function MenuItemModal({ item, onClose }: Props) {
   if (!item) return null;
 
   const categoryEmoji = CATEGORIES.find((c) => c.id === item.category)?.emoji ?? '🍽';
+  const customizationGroup = getCustomizationOptions(item.id);
+  const hasCustomizations = itemHasCustomizations(item.id);
+  const cartQty = getItemQuantity(item.id);
+  const unitPrice = lineUnitPrice(item.price, item.id, customizations);
+
+  const toggleList = (key: keyof CartCustomizations, id: string) => {
+    setCustomizations((prev) => {
+      const current = (prev[key] as string[] | undefined) ?? [];
+      const next = current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
+      return { ...prev, [key]: next.length > 0 ? next : undefined };
+    });
+  };
+
+  const handleAdd = () => addItem(item, 1, customizations);
 
   return (
     <Modal transparent visible={!!item} onRequestClose={handleClose} statusBarTranslucent>
@@ -192,31 +277,56 @@ export default function MenuItemModal({ item, onClose }: Props) {
               </View>
             )}
 
+            {customizationGroup && (
+              <>
+                <View style={[styles.divider, { backgroundColor: colors.borderSubtle }]} />
+                <Text style={[styles.customizeHeading, { color: colors.cream }]}>Customize your order</Text>
+                <CustomizationSection
+                  title="Remove ingredients"
+                  options={customizationGroup.removals ?? []}
+                  selectedIds={customizations.removals ?? []}
+                  onToggle={(id) => toggleList('removals', id)}
+                />
+                <CustomizationSection
+                  title="Add extras"
+                  options={customizationGroup.addOns ?? []}
+                  selectedIds={customizations.addOns ?? []}
+                  onToggle={(id) => toggleList('addOns', id)}
+                />
+                <CustomizationSection
+                  title="Substitutions"
+                  options={customizationGroup.substitutions ?? []}
+                  selectedIds={customizations.substitutions ?? []}
+                  onToggle={(id) => toggleList('substitutions', id)}
+                />
+              </>
+            )}
+
             <View style={{ height: 16 }} />
           </View>
         </ScrollView>
 
         {/* Bottom CTA */}
         <View style={[styles.bottomBar, { borderColor: colors.borderSubtle, backgroundColor: colors.bgCard }]}>
-          {cartEntry ? (
+          {cartQty > 0 && !hasCustomizations ? (
             <View style={[styles.qtyControl, { backgroundColor: colors.bgElevated, borderColor: colors.border }]}>
               <TouchableOpacity
-                onPress={() => cartEntry.quantity === 1 ? removeItem(item.id) : updateQuantity(item.id, cartEntry.quantity - 1)}
+                onPress={() => decrementItem(item.id)}
                 style={styles.qtyBtn}
                 activeOpacity={0.7}
               >
                 <Text style={[styles.qtyBtnText, { color: colors.gold }]}>−</Text>
               </TouchableOpacity>
-              <Text style={[styles.qtyValue, { color: colors.cream }]}>{cartEntry.quantity} in order</Text>
-              <TouchableOpacity onPress={() => updateQuantity(item.id, cartEntry.quantity + 1)} style={styles.qtyBtn} activeOpacity={0.7}>
+              <Text style={[styles.qtyValue, { color: colors.cream }]}>{cartQty} in order</Text>
+              <TouchableOpacity onPress={handleAdd} style={styles.qtyBtn} activeOpacity={0.7}>
                 <Text style={[styles.qtyBtnText, { color: colors.gold }]}>+</Text>
               </TouchableOpacity>
             </View>
           ) : (
-            <TouchableOpacity onPress={() => addItem(item)} activeOpacity={0.85} style={styles.addBtnWrap}>
+            <TouchableOpacity onPress={handleAdd} activeOpacity={0.85} style={styles.addBtnWrap}>
               <LinearGradient colors={[colors.gold, colors.goldDim]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.addBtn}>
                 <Text style={[styles.addBtnText, { color: isDark ? '#0D0D0D' : '#FFFFFF' }]}>
-                  Add to Order — ${item.price.toFixed(2)}
+                  {cartQty > 0 ? `Add Another — $${unitPrice.toFixed(2)}` : `Add to Order — $${unitPrice.toFixed(2)}`}
                 </Text>
               </LinearGradient>
             </TouchableOpacity>
@@ -403,6 +513,29 @@ const styles = StyleSheet.create({
   noAllergens: {
     fontFamily: Fonts.sans,
     fontSize: 13,
+  },
+  customizeHeading: {
+    fontFamily: Fonts.serif,
+    fontSize: 20,
+    marginTop: 4,
+  },
+  customSection: {
+    gap: 10,
+  },
+  customChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  customChip: {
+    borderRadius: 100,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  customChipText: {
+    fontFamily: Fonts.sansMedium,
+    fontSize: 12,
   },
   bottomBar: {
     borderTopWidth: 1,
