@@ -19,7 +19,8 @@
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
         },
-        "NSMicrophoneUsageDescription": "Allow Bistro to use the microphone for voice orders."
+        "NSMicrophoneUsageDescription": "Allow Bistro to use the microphone for voice orders.",
+        "NSLocalNetworkUsageDescription": "Bistro connects to your development server on the local network for voice ordering."
       },
       "bundleIdentifier": "com.anonymous.intelligent-bistro"
     },

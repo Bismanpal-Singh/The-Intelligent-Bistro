@@ -1,0 +1,220 @@
+import {
+  customizationGuideForPrompt,
+  formatCustomizationsHuman,
+  lineUnitPrice,
+} from './customizations.js';
+
+export const MENU = [
+  { id: 'crispy-calamari', name: 'Crispy Calamari', price: 14.0, category: 'starters', popular: true },
+  { id: 'burrata', name: 'Burrata & Heritage Tomato', price: 16.0, category: 'starters', popular: true },
+  { id: 'french-onion', name: 'French Onion Soup', price: 12.0, category: 'starters' },
+  { id: 'garlic-focaccia', name: 'Rosemary Focaccia', price: 8.0, category: 'starters' },
+  { id: 'avocado-toast', name: 'Avocado Toast', price: 13.0, category: 'starters' },
+  { id: 'caprese-stack', name: 'Caprese Stack', price: 14.0, category: 'starters' },
+  { id: 'spicy-chicken', name: 'Spicy Chicken Sandwich', price: 22.0, category: 'mains', popular: true },
+  { id: 'wagyu-burger', name: 'Wagyu Beef Burger', price: 28.0, category: 'mains', popular: true },
+  { id: 'grilled-salmon', name: 'Grilled Atlantic Salmon', price: 32.0, category: 'mains' },
+  { id: 'veggie-wrap', name: 'Roasted Veggie Wrap', price: 18.0, category: 'mains' },
+  { id: 'steak-frites', name: 'Steak Frites', price: 42.0, category: 'mains' },
+  { id: 'mushroom-risotto', name: 'Wild Mushroom Risotto', price: 24.0, category: 'mains', popular: true },
+  { id: 'cauliflower-steak', name: 'Roasted Cauliflower Steak', price: 21.0, category: 'mains' },
+  { id: 'truffle-fries', name: 'Truffle Fries', price: 10.0, category: 'sides', popular: true },
+  { id: 'onion-rings', name: 'Onion Rings', price: 9.0, category: 'sides' },
+  { id: 'side-salad', name: 'Garden Salad', price: 8.0, category: 'sides' },
+  { id: 'mac-cheese', name: 'Bistro Mac & Cheese', price: 11.0, category: 'sides' },
+  { id: 'halloumi-fries', name: 'Halloumi Fries', price: 12.0, category: 'sides', popular: true },
+  { id: 'house-lemonade', name: 'House Lemonade', price: 6.0, category: 'drinks', popular: true },
+  { id: 'still-water', name: 'Still Water', price: 3.0, category: 'drinks' },
+  { id: 'sparkling-water', name: 'Sparkling Water', price: 4.0, category: 'drinks' },
+  { id: 'coke', name: 'Classic Coke', price: 4.5, category: 'drinks' },
+  { id: 'orange-juice', name: 'Fresh Orange Juice', price: 7.0, category: 'drinks' },
+  { id: 'bistro-cocktail', name: 'Bistro Signature', price: 12.0, category: 'drinks', popular: true },
+  { id: 'lava-cake', name: 'Chocolate Lava Cake', price: 14.0, category: 'desserts', popular: true },
+  { id: 'cheesecake', name: 'Burnt Basque Cheesecake', price: 12.0, category: 'desserts' },
+  { id: 'panna-cotta', name: 'Vanilla Panna Cotta', price: 11.0, category: 'desserts' },
+  { id: 'mango-sorbet', name: 'Mango Sorbet', price: 9.0, category: 'desserts' },
+];
+
+export const MENU_IDS = MENU.map((m) => m.id);
+
+const menuText = MENU.map(
+  (m) =>
+    `- ${m.name} (${m.id}) — $${m.price.toFixed(2)} [${m.category}]${m.popular ? ' ★ popular' : ''}`
+).join('\n');
+
+export const VOICE_INSTRUCTIONS = `You are Bistro, an elegant voice dining assistant for The Intelligent Bistro — a premium restaurant. You are on a live voice call with a guest.
+
+Speak naturally in short sentences (one or two). No markdown. After using a tool, briefly confirm what you did.
+
+When the guest asks what's popular, mention items marked ★. Use cart context for vague references ("the burger").
+
+Customization rules:
+- New dish with changes → add_to_cart with customizations.
+- Change an item already in cart → update_customizations with patch on cartLineId.
+- Remove a whole dish → remove_from_cart.
+- If only one line exists for a dish, itemId is enough for update_customizations.
+
+Customization catalog:
+${customizationGuideForPrompt()}
+
+Never invent menu items.
+
+Menu:
+${menuText}`;
+
+export const TOOLS = [
+  {
+    name: 'add_to_cart',
+    description: "Add a menu item to the guest's order.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        itemId: { type: 'string', enum: MENU_IDS, description: 'Menu item id' },
+        quantity: { type: 'integer', minimum: 1, description: 'Quantity (default 1)' },
+        customizations: {
+          type: 'object',
+          properties: {
+            addOns: { type: 'array', items: { type: 'string' } },
+            removals: { type: 'array', items: { type: 'string' } },
+            substitutions: { type: 'array', items: { type: 'string' } },
+            notes: { type: 'string' },
+          },
+        },
+      },
+      required: ['itemId', 'quantity'],
+    },
+  },
+  {
+    name: 'remove_from_cart',
+    description: 'Remove from cart by cartLineId or all lines for itemId.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        cartLineId: { type: 'string' },
+        itemId: { type: 'string', enum: MENU_IDS },
+      },
+    },
+  },
+  {
+    name: 'update_customizations',
+    description: 'Modify customizations on an existing cart line.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        cartLineId: { type: 'string' },
+        itemId: { type: 'string', enum: MENU_IDS },
+        patch: {
+          type: 'object',
+          properties: {
+            addRemovals: { type: 'array', items: { type: 'string' } },
+            removeRemovals: { type: 'array', items: { type: 'string' } },
+            addAddOns: { type: 'array', items: { type: 'string' } },
+            removeAddOns: { type: 'array', items: { type: 'string' } },
+            addSubstitutions: { type: 'array', items: { type: 'string' } },
+            removeSubstitutions: { type: 'array', items: { type: 'string' } },
+            notes: { type: 'string' },
+          },
+        },
+        customizations: {
+          type: 'object',
+          properties: {
+            addOns: { type: 'array', items: { type: 'string' } },
+            removals: { type: 'array', items: { type: 'string' } },
+            substitutions: { type: 'array', items: { type: 'string' } },
+            notes: { type: 'string' },
+          },
+        },
+      },
+    },
+  },
+  {
+    name: 'update_quantity',
+    description: 'Set quantity for a cart line.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        cartLineId: { type: 'string' },
+        itemId: { type: 'string', enum: MENU_IDS },
+        quantity: { type: 'integer', minimum: 1 },
+      },
+      required: ['quantity'],
+    },
+  },
+  {
+    name: 'clear_cart',
+    description: 'Clear the entire cart when the guest explicitly asks.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+];
+
+export function toOpenAITools() {
+  return TOOLS.map((t) => ({
+    type: 'function',
+    name: t.name,
+    description: t.description,
+    parameters: t.input_schema,
+  }));
+}
+
+function customizationSummary(itemId, customizations = {}) {
+  const human = formatCustomizationsHuman(itemId, customizations);
+  const ids = [];
+  if (customizations.removals?.length) ids.push(`removalIds: [${customizations.removals.join(', ')}]`);
+  if (customizations.addOns?.length) ids.push(`addOnIds: [${customizations.addOns.join(', ')}]`);
+  if (customizations.substitutions?.length) {
+    ids.push(`substitutionIds: [${customizations.substitutions.join(', ')}]`);
+  }
+  if (customizations.notes) ids.push(`note: ${customizations.notes}`);
+  const idPart = ids.length ? ` | ${ids.join(' | ')}` : '';
+  return human ? ` | ${human}${idPart}` : idPart;
+}
+
+export function cartContextString(cartItems) {
+  if (!cartItems?.length) return 'The cart is currently empty.';
+  return (
+    'Current cart:\n' +
+    cartItems
+      .map((i) => {
+        const unit = lineUnitPrice(i.price, i.itemId, i.customizations ?? {});
+        const lineTotal = unit * i.quantity;
+        const c = customizationSummary(i.itemId, i.customizations);
+        return `- ${i.name} x${i.quantity}${c} [cartLineId: ${i.cartLineId}, itemId: ${i.itemId}] — $${lineTotal.toFixed(2)}`;
+      })
+      .join('\n')
+  );
+}
+
+export function toolCallToActions(name, input) {
+  const actions = [];
+  if (name === 'add_to_cart') {
+    if (!MENU_IDS.includes(input.itemId)) return actions;
+    actions.push({
+      action: 'add',
+      itemId: input.itemId,
+      quantity: input.quantity ?? 1,
+      customizations: input.customizations,
+    });
+  } else if (name === 'remove_from_cart') {
+    if (input.cartLineId) actions.push({ action: 'remove', cartLineId: input.cartLineId });
+    else if (input.itemId && MENU_IDS.includes(input.itemId)) {
+      actions.push({ action: 'remove', itemId: input.itemId });
+    }
+  } else if (name === 'update_customizations') {
+    const payload = { action: 'update_customizations' };
+    if (input.cartLineId) payload.cartLineId = input.cartLineId;
+    else if (input.itemId && MENU_IDS.includes(input.itemId)) payload.itemId = input.itemId;
+    else return actions;
+    if (input.patch) payload.patch = input.patch;
+    if (input.customizations) payload.customizations = input.customizations;
+    if (payload.patch || payload.customizations) actions.push(payload);
+  } else if (name === 'update_quantity') {
+    if (input.cartLineId) {
+      actions.push({ action: 'update', cartLineId: input.cartLineId, quantity: input.quantity });
+    } else if (input.itemId && MENU_IDS.includes(input.itemId)) {
+      actions.push({ action: 'update', itemId: input.itemId, quantity: input.quantity });
+    }
+  } else if (name === 'clear_cart') {
+    actions.push({ action: 'clear' });
+  }
+  return actions;
+}

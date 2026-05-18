@@ -1,6 +1,7 @@
 import { config } from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import http from 'http';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 config({ path: join(__dirname, '.env') });
 
@@ -14,10 +15,12 @@ import {
   lineUnitPrice,
 } from './customizations.js';
 import { transcribeAudioBuffer } from './transcribe.js';
+import { attachVoiceRealtime } from './voiceRealtime.js';
+import { cartContextString, toolCallToActions } from './agentShared.js';
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -240,51 +243,15 @@ function customizationSummary(itemId, customizations = {}) {
   return human ? ` | ${human}${idPart}` : idPart;
 }
 
-function cartContextString(cartItems) {
-  return cartItems.length === 0
-    ? 'The cart is currently empty.'
-    : 'Current cart:\n' + cartItems.map((i) => {
-        const unit = lineUnitPrice(i.price, i.itemId, i.customizations ?? {});
-        const lineTotal = unit * i.quantity;
-        const c = customizationSummary(i.itemId, i.customizations);
-        return `- ${i.name} x${i.quantity}${c} [cartLineId: ${i.cartLineId}, itemId: ${i.itemId}] — $${lineTotal.toFixed(2)}`;
-      }).join('\n');
-}
-
 function extractActions(toolBlocks) {
   const actions = [];
   for (const block of toolBlocks) {
-    const { name, input } = block;
-    if (name === 'add_to_cart') {
-      if (!MENU_IDS.includes(input.itemId)) continue;
-      actions.push({
-        action: 'add',
-        itemId: input.itemId,
-        quantity: input.quantity ?? 1,
-        customizations: input.customizations,
-      });
-    } else if (name === 'remove_from_cart') {
-      if (input.cartLineId) actions.push({ action: 'remove', cartLineId: input.cartLineId });
-      else if (input.itemId && MENU_IDS.includes(input.itemId)) actions.push({ action: 'remove', itemId: input.itemId });
-    } else if (name === 'update_customizations') {
-      const payload = { action: 'update_customizations' };
-      if (input.cartLineId) payload.cartLineId = input.cartLineId;
-      else if (input.itemId && MENU_IDS.includes(input.itemId)) payload.itemId = input.itemId;
-      else continue;
-      if (input.patch) payload.patch = input.patch;
-      if (input.customizations) payload.customizations = input.customizations;
-      if (payload.patch || payload.customizations) actions.push(payload);
-    } else if (name === 'update_quantity') {
-      if (input.cartLineId) actions.push({ action: 'update', cartLineId: input.cartLineId, quantity: input.quantity });
-      else if (input.itemId && MENU_IDS.includes(input.itemId)) actions.push({ action: 'update', itemId: input.itemId, quantity: input.quantity });
-    } else if (name === 'clear_cart') actions.push({ action: 'clear' });
+    actions.push(...toolCallToActions(block.name, block.input));
   }
   return actions;
 }
 
 // ─── Streaming chat endpoint ───────────────────────────────────────────────────
-// Phase 1: tool calls only  → sends { type:'actions', actions:[...] } immediately
-// Phase 2: text only, streamed → sends { type:'delta', text:'...' } per chunk
 app.post('/api/chat/stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -299,7 +266,6 @@ app.post('/api/chat/stream', async (req, res) => {
     const actions = [];
     let currentMessages = buildMessages(history, cartContextString(cartItems), message);
 
-    // Phase 1: tool calls only
     for (let turn = 0; turn < 5; turn++) {
       const response = await client.messages.create({
         model: 'claude-haiku-4-5-20251001',
@@ -322,10 +288,8 @@ app.post('/api/chat/stream', async (req, res) => {
       ];
     }
 
-    // Send cart actions immediately so the frontend can update the cart right away
     send({ type: 'actions', actions });
 
-    // Phase 2: stream the conversational reply (no more tool calls allowed)
     const stream = client.messages.stream({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 512,
@@ -349,7 +313,6 @@ app.post('/api/chat/stream', async (req, res) => {
   }
 });
 
-// ─── Speech-to-text (local Whisper) — Expo Go on device, no extra API keys ───────
 app.post('/api/speech/transcribe', upload.single('audio'), async (req, res) => {
   if (!req.file?.buffer?.length) {
     return res.status(400).json({ error: 'No audio received.' });
@@ -372,16 +335,20 @@ app.post('/api/speech/transcribe', upload.single('audio'), async (req, res) => {
   }
 });
 
-// ─── Health check ──────────────────────────────────────────────────────────────
 app.get('/health', (_, res) =>
   res.json({
     status: 'ok',
     voice: true,
-    voiceEngine: 'local-whisper',
+    voiceEngine: process.env.OPENAI_API_KEY ? 'openai-realtime' : 'local-whisper',
+    realtimeModel: process.env.OPENAI_REALTIME_MODEL ?? 'gpt-4o-mini-realtime-preview-2024-12-17',
   })
 );
 
 const PORT = process.env.PORT ?? 3000;
-app.listen(PORT, '0.0.0.0', () =>
-  console.log(`Bistro backend running on http://0.0.0.0:${PORT}`)
-);
+const httpServer = http.createServer(app);
+attachVoiceRealtime(httpServer);
+
+httpServer.listen(PORT, '0.0.0.0', () => {
+  console.log(`Bistro backend running on http://0.0.0.0:${PORT}`);
+  console.log(`Voice WebSocket: ws://0.0.0.0:${PORT}/voice/realtime`);
+});

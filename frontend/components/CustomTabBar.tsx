@@ -9,13 +9,13 @@ import { useTheme } from '../context/ThemeContext';
 const TAB_ICONS: Record<string, string> = {
   index: '◈',
   cart: '◉',
-  chat: '◎',
+  voice: '◎',
 };
 
 const TAB_LABELS: Record<string, string> = {
   index: 'Menu',
   cart: 'Order',
-  chat: 'Bistro',
+  voice: 'Bistro',
 };
 
 function TabButton({ route, isFocused, onPress, onLongPress }: {

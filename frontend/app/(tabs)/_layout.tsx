@@ -5,7 +5,8 @@ export default function TabLayout() {
   return (
     <Tabs tabBar={(props) => <CustomTabBar {...props} />} screenOptions={{ headerShown: false }}>
       <Tabs.Screen name="index" />
-      <Tabs.Screen name="chat" />
+      <Tabs.Screen name="voice" />
+      <Tabs.Screen name="chat" options={{ href: null }} />
       <Tabs.Screen name="cart" />
     </Tabs>
   );
